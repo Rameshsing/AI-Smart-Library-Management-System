@@ -523,8 +523,8 @@ export function BookDetailsPage({
               <strong className="font-semibold text-[#142B4A]">
                 Sample Book Record:
               </strong>{' '}
-              Showing development data structured for database verification; live borrowing,
-              reservations, and reviews commit via the Flask + MySQL API.
+              Showing development data structured for catalog preview; live borrowing,
+              reservations, and reviews commit via the library circulation API.
             </span>
           </div>
           <span className="font-mono-tabular shrink-0 text-[11px] font-medium text-[#64748B]">

@@ -449,28 +449,28 @@ export function AddBookPage({
       const payload = buildAddBookTransactionPayload(form);
       const endpoint = `${apiBaseUrl.replace(/\/+$/, '')}/api/librarian/books`;
 
-      let response: Response;
+      let coverImageUrl = payload.cover_image;
       if (coverFile) {
-        const formData = new FormData();
-        formData.append('cover_image_file', coverFile);
-        formData.append('payload', JSON.stringify(payload));
-        response = await fetch(endpoint, {
-          method: 'POST',
-          credentials: 'include',
-          headers: { Accept: 'application/json' },
-          body: formData,
-        });
-      } else {
-        response = await fetch(endpoint, {
-          method: 'POST',
-          credentials: 'include',
-          headers: {
-            'Content-Type': 'application/json',
-            Accept: 'application/json',
-          },
-          body: JSON.stringify(payload),
+        coverImageUrl = await new Promise<string>((resolve) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '');
+          reader.onerror = () => resolve('');
+          reader.readAsDataURL(coverFile);
         });
       }
+
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify({
+          ...payload,
+          cover_image: coverImageUrl || payload.cover_image,
+        }),
+      });
 
       if (response.status === 401) {
         onNavigate({ name: 'admin-login' });

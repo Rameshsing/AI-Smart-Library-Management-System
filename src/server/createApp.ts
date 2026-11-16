@@ -12,11 +12,25 @@ import {
   verifySignedSessionToken,
 } from './security.ts';
 import { reconcileBookCounts } from './seedData.ts';
-import type { DbSession, DbUser, UserRole } from './types.ts';
+import type { DbAnnouncement, DbSession, DbUser, UserRole } from './types.ts';
 import type { PermissionKey } from '../utils/adminManagement.ts';
 import type { CopyCondition, CopyStatus } from '../utils/librarianInventory.ts';
 import type { ReturnCopyCondition } from '../utils/librarianCirculation.ts';
 import type { RecommendationFeedbackValue } from '../utils/recommendationsPage.ts';
+import type {
+  ExpectedReturnsPayload,
+  InventoryOverviewPayload,
+  LibrarianAlertsPayload,
+  LibrarianAnalyticsPayload,
+  LibrarianAnnouncementRecord,
+  LibrarianProfile,
+  LibrarianReservationsOverviewPayload,
+  LibrarianReservationStatus,
+  LibrarianSummaryPayload,
+  RecentBorrowingsPayload,
+  StudentActivityPayload,
+} from '../utils/librarianDashboard.ts';
+import type { ReportsSourceDataset } from '../utils/librarianReports.ts';
 
 interface AuthenticatedRequest extends Request {
   currentUser?: DbUser;
@@ -40,7 +54,7 @@ function getOptionalSession(
 export function createLibraryApp(service: LibraryService) {
   const app = express();
   app.set('trust proxy', 1);
-  app.use(express.json({ limit: '2mb' }));
+  app.use(express.json({ limit: '5mb' }));
 
   const requireAuth = (req: AuthenticatedRequest, _res: Response, next: NextFunction) => {
     const found = getOptionalSession(service, req);
@@ -498,151 +512,342 @@ export function createLibraryApp(service: LibraryService) {
 
   const requireStaff = [requireAuth, requireRole(['librarian', 'admin'])] as const;
 
-  app.get('/api/librarian/dashboard/summary', ...requireStaff, (_req, res) => {
+  app.get('/api/librarian/dashboard/summary', ...requireStaff, (req: AuthenticatedRequest, res) => {
     const activeBooks = service.state.books.filter((b) => b.status === 'Active');
     const overdue = service.getOverdueRecords();
     const activeLoans = service.state.borrowings.filter((b) => b.status !== 'Returned');
     const pendingRes = service.state.reservations.filter(
       (r) => r.status === 'Waiting' || r.status === 'Ready for Pickup'
     );
-    const today = new Date().toISOString().slice(0, 10);
+    const sessionUser = req.currentUser!;
+    const sessionPayload = service.buildSessionPayload(sessionUser);
+    const librarianProfile: LibrarianProfile = sessionPayload.librarian ?? {
+      librarian_id: sessionUser.user_id,
+      user_id: sessionUser.user_id,
+      staff_code: sessionUser.code,
+      full_name: sessionUser.full_name,
+      email: sessionUser.email,
+      department_title: sessionUser.designation ?? 'Library Administrator',
+      role: 'librarian',
+      account_status: sessionUser.account_status === 'Active' ? 'Active' : 'Suspended',
+      avatar_url: sessionUser.avatar_url,
+      permissions: {
+        can_manage_inventory: true,
+        can_issue_books: true,
+        can_return_books: true,
+        can_manage_reservations: true,
+        can_view_student_records: true,
+        can_view_new_registrations: true,
+        can_manage_announcements: true,
+        can_view_reports: true,
+      },
+    };
 
-    res.json({
+    const payload: LibrarianSummaryPayload = {
       is_prototype_sample: false,
-      total_books: activeBooks.length,
-      total_copies: activeBooks.reduce((s, b) => s + b.total_copies, 0),
-      available_copies: activeBooks.reduce((s, b) => s + b.available_copies, 0),
-      currently_issued: activeLoans.length,
-      due_today: activeLoans.filter((b) => b.due_date === today).length,
-      overdue_books: overdue.length,
-      pending_reservations: pendingRes.length,
-      ready_for_pickup: pendingRes.filter((r) => r.status === 'Ready for Pickup').length,
-      returned_today: service.state.borrowings.filter(
-        (b) => b.status === 'Returned' && b.return_date === today
-      ).length,
-      total_students: service.state.users.filter((u) => u.role === 'student').length,
-      active_announcements: service.state.announcements.filter((a) => a.status === 'Published')
-        .length,
-      previous_deltas: null,
-    });
+      librarian: librarianProfile,
+      metrics: {
+        total_books_unique_titles: activeBooks.length,
+        total_book_copies: activeBooks.reduce((s, b) => s + b.total_copies, 0),
+        available_copies: activeBooks.reduce((s, b) => s + b.available_copies, 0),
+        currently_issued: activeLoans.length,
+        pending_reservations: pendingRes.length,
+        overdue_books: overdue.length,
+        previous_period_delta: null,
+      },
+      supported_borrowing_statuses: ['Issued', 'Returned', 'Overdue', 'Renewal Pending'],
+    };
+    res.json(payload);
   });
 
-  app.get('/api/librarian/dashboard/recent-borrowings', ...requireStaff, (_req, res) => {
-    const items = service.state.borrowings.slice(0, 8).map((b) => {
-      const detail = service.toActiveBorrowingDetail(b);
-      return {
-        borrowing_id: detail.borrowing_id,
-        transaction_code: detail.transaction_code,
-        student_id: detail.student_id,
-        student_name: detail.student_name,
-        student_code: detail.student_code,
-        book_id: detail.book_id,
-        book_slug: service.state.books.find((x) => x.book_id === detail.book_id)?.slug ?? String(detail.book_id),
-        book_title: detail.book_title,
-        copy_code: detail.accession_number,
-        issue_date: detail.issue_date,
-        due_date: detail.due_date,
-        return_date: detail.return_date,
-        status: detail.status,
-      };
-    });
-    res.json({
+  app.get('/api/librarian/dashboard/recent-borrowings', ...requireStaff, (req, res) => {
+    const page = Math.max(1, Number.parseInt(String(req.query.page ?? '1'), 10) || 1);
+    const limit = Math.min(50, Math.max(1, Number.parseInt(String(req.query.limit ?? '8'), 10) || 8));
+    const totalCount = service.state.borrowings.length;
+    const totalPages = Math.max(1, Math.ceil(totalCount / limit));
+    const safePage = Math.min(page, totalPages);
+
+    const items = service.state.borrowings
+      .slice((safePage - 1) * limit, safePage * limit)
+      .map((b) => {
+        const detail = service.toActiveBorrowingDetail(b);
+        const book = service.state.books.find((x) => x.book_id === detail.book_id);
+        const copy = service.state.copies.find((x) => x.copy_id === detail.copy_id);
+        return {
+          borrowing_id: detail.borrowing_id,
+          transaction_code: detail.transaction_code,
+          student_id: detail.student_id,
+          student_name: detail.student_name,
+          student_code: detail.student_code,
+          book_id: detail.book_id,
+          book_slug: book?.slug ?? String(detail.book_id),
+          book_title: detail.book_title,
+          copy_id: detail.copy_id,
+          accession_number: detail.accession_number,
+          shelf_location:
+            copy ? `${copy.floor} · Row ${copy.shelf}` : book ? `${book.floor} · Row ${book.shelf}` : 'Main Stacks',
+          issue_date: detail.issue_date,
+          due_date: detail.due_date,
+          return_date: detail.return_date,
+          status: detail.status,
+        };
+      });
+
+    const payload: RecentBorrowingsPayload = {
       items,
-      total: service.state.borrowings.length,
-      page: 1,
-      limit: 8,
-    });
+      page: safePage,
+      limit,
+      total_count: totalCount,
+      total_pages: totalPages,
+    };
+    res.json(payload);
   });
 
   app.get('/api/librarian/dashboard/expected-returns', ...requireStaff, (_req, res) => {
     const active = service.state.borrowings
       .filter((b) => b.status !== 'Returned')
-      .map((b) => service.toActiveBorrowingDetail(b));
-    res.json({
-      due_today_or_soon: active.slice(0, 6),
-      overdue_priority: service.getOverdueRecords().slice(0, 6),
-    });
+      .slice()
+      .sort((a, b) => a.due_date.localeCompare(b.due_date))
+      .map((b) => {
+        const detail = service.toActiveBorrowingDetail(b);
+        const book = service.state.books.find((x) => x.book_id === detail.book_id);
+        return {
+          borrowing_id: detail.borrowing_id,
+          book_id: detail.book_id,
+          book_slug: book?.slug ?? String(detail.book_id),
+          book_title: detail.book_title,
+          student_name: detail.student_name,
+          student_code: detail.student_code,
+          issue_date: detail.issue_date,
+          due_date: detail.due_date,
+          status: (detail.status === 'Returned' ? 'Issued' : detail.status) as
+            | 'Issued'
+            | 'Overdue'
+            | 'Renewal Pending',
+        };
+      });
+
+    const payload: ExpectedReturnsPayload = {
+      items: active.slice(0, 8),
+      total_upcoming_or_overdue: active.length,
+    };
+    res.json(payload);
   });
 
   app.get('/api/librarian/dashboard/reservations', ...requireStaff, (_req, res) => {
-    const items = service.state.reservations
-      .filter((r) => r.status === 'Waiting' || r.status === 'Ready for Pickup')
-      .slice(0, 6)
-      .map((r) => service.toLibrarianReservationItem(r));
-    res.json({ items });
+    const mapped = service.state.reservations.map((r) => service.toLibrarianReservationItem(r));
+    const mapDashStatus = (item: (typeof mapped)[number]): LibrarianReservationStatus => {
+      if (item.status === 'Ready for Pickup') {
+        if (item.pickup_deadline) {
+          const msLeft = new Date(item.pickup_deadline).getTime() - Date.now();
+          if (msLeft > 0 && msLeft <= 12 * 3_600_000) return 'Expiring Soon';
+        }
+        return 'Ready for Pickup';
+      }
+      if (item.status === 'Completed') return 'Fulfilled';
+      return 'Waiting';
+    };
+
+    const activeItems = mapped.filter(
+      (r) => r.status === 'Waiting' || r.status === 'Ready for Pickup'
+    );
+    const items = (activeItems.length > 0 ? activeItems : mapped).slice(0, 6).map((item) => {
+      const book = service.state.books.find((x) => x.book_id === item.book_id);
+      return {
+        reservation_id: item.reservation_id,
+        book_id: item.book_id,
+        book_slug: book?.slug ?? String(item.book_id),
+        book_title: item.book_title,
+        student_name: item.student_name,
+        student_code: item.student_code,
+        reservation_date: item.reservation_date.slice(0, 10),
+        queue_position: item.queue_position,
+        status: mapDashStatus(item),
+      };
+    });
+
+    const payload: LibrarianReservationsOverviewPayload = {
+      counts: {
+        active_waiting: mapped.filter((r) => r.status === 'Waiting').length,
+        ready_for_pickup: mapped.filter((r) => r.status === 'Ready for Pickup').length,
+        expiring_soon: mapped.filter((r) => mapDashStatus(r) === 'Expiring Soon').length,
+        recently_fulfilled: mapped.filter((r) => r.status === 'Completed').length,
+      },
+      supports_queue_position: true,
+      items,
+    };
+    res.json(payload);
   });
 
   app.get('/api/librarian/dashboard/inventory-overview', ...requireStaff, (_req, res) => {
     const activeBooks = service.state.books.filter((b) => b.status === 'Active');
-    res.json({
-      low_stock_books: activeBooks
-        .filter((b) => b.available_copies <= 1)
-        .map((b) => service.toInventoryBookItem(b)),
-      recently_added: activeBooks.slice(0, 4).map((b) => service.toInventoryBookItem(b)),
-    });
+    const lowStockThreshold = 1;
+    const cutoffMs = Date.now() - 30 * 86_400_000;
+    const items = activeBooks.slice(0, 8).map((b) => ({
+      book_id: b.book_id,
+      slug: b.slug,
+      cover_image: b.cover_image,
+      title: b.title,
+      author: b.authors,
+      isbn: b.isbn,
+      category: b.category,
+      total_copies: b.total_copies,
+      available_copies: b.available_copies,
+      is_recently_added: new Date(b.created_at).getTime() >= cutoffMs,
+    }));
+
+    const payload: InventoryOverviewPayload = {
+      configured_low_stock_threshold: lowStockThreshold,
+      counts: {
+        recently_added: activeBooks.filter((b) => new Date(b.created_at).getTime() >= cutoffMs).length,
+        low_copy_titles: activeBooks.filter(
+          (b) => b.available_copies > 0 && b.available_copies <= lowStockThreshold
+        ).length,
+        unavailable_titles: activeBooks.filter((b) => b.available_copies <= 0).length,
+        available_titles: activeBooks.filter((b) => b.available_copies > 0).length,
+      },
+      items,
+    };
+    res.json(payload);
   });
 
   app.get('/api/librarian/dashboard/alerts', ...requireStaff, (_req, res) => {
-    const overdueCount = service.getOverdueRecords().length;
+    const overdueList = service.getOverdueRecords();
     const lowStockCount = service.state.books.filter(
       (b) => b.status === 'Active' && b.available_copies === 0
     ).length;
     const readyCount = service.state.reservations.filter(
       (r) => r.status === 'Ready for Pickup'
     ).length;
-    const alerts = [];
-    if (overdueCount > 0) {
-      alerts.push({
-        id: 'alert-overdue',
-        severity: 'high',
-        title: `${overdueCount} Overdue Borrowing${overdueCount === 1 ? '' : 's'}`,
+    const today = new Date().toISOString().slice(0, 10);
+    const dueTodayCount = service.state.borrowings.filter(
+      (b) => b.status !== 'Returned' && b.due_date === today
+    ).length;
+    const nowIso = new Date().toISOString();
+
+    const items: LibrarianAlertsPayload['items'] = [];
+    if (overdueList.length > 0) {
+      items.push({
+        alert_id: 'alert-overdue',
+        category: 'overdue',
+        title: `${overdueList.length} Overdue Borrowing${overdueList.length === 1 ? '' : 's'}`,
         description: 'Follow up with students or dispatch reminder notices.',
-        actionLabel: 'Review Overdue',
-        targetRoute: { name: 'librarian-overdue' },
+        priority: 'Urgent',
+        timestamp: nowIso,
+        action_label: 'Open Overdue Books',
+        action_route: 'librarian-overdue',
+      });
+    }
+    if (dueTodayCount > 0) {
+      items.push({
+        alert_id: 'alert-due-today',
+        category: 'due_today',
+        title: `${dueTodayCount} Book${dueTodayCount === 1 ? '' : 's'} Due Today`,
+        description: 'Scheduled for circulation desk check-in today.',
+        priority: 'High',
+        timestamp: nowIso,
+        action_label: 'Process Returns',
+        action_route: 'librarian-return-books',
       });
     }
     if (readyCount > 0) {
-      alerts.push({
-        id: 'alert-res-ready',
-        severity: 'medium',
-        title: `${readyCount} Hold Ready for Pickup`,
+      items.push({
+        alert_id: 'alert-res-ready',
+        category: 'reservation_ready',
+        title: `${readyCount} Hold${readyCount === 1 ? '' : 's'} Ready for Pickup`,
         description: 'Monitor pickup deadlines at the circulation desk.',
-        actionLabel: 'Manage Holds',
-        targetRoute: { name: 'librarian-reservations' },
+        priority: 'High',
+        timestamp: nowIso,
+        action_label: 'Manage Reservations',
+        action_route: 'librarian-reservations',
       });
     }
     if (lowStockCount > 0) {
-      alerts.push({
-        id: 'alert-low-stock',
-        severity: 'info',
+      items.push({
+        alert_id: 'alert-low-stock',
+        category: 'low_inventory',
         title: `${lowStockCount} Title${lowStockCount === 1 ? '' : 's'} Fully Checked Out`,
         description: 'Zero shelf copies currently available; check reservation queues.',
-        actionLabel: 'Inspect Inventory',
-        targetRoute: { name: 'librarian-inventory' },
+        priority: 'Normal',
+        timestamp: nowIso,
+        action_label: 'Inspect Inventory',
+        action_route: 'librarian-inventory',
       });
     }
-    res.json({ items: alerts });
+
+    const payload: LibrarianAlertsPayload = { items };
+    res.json(payload);
   });
 
   app.get('/api/librarian/dashboard/announcements', ...requireStaff, (_req, res) => {
-    res.json({
-      items: service.state.announcements.slice(0, 4).map((a) => ({
+    const items: LibrarianAnnouncementRecord[] = service.state.announcements
+      .filter((a) => a.status !== 'Archived')
+      .slice(0, 4)
+      .map((a) => ({
         announcement_id: a.announcement_id,
         title: a.title,
-        summary: a.content,
-        audience: a.target_type === 'all_students' ? 'All Students' : a.target_value ?? 'Targeted',
-        status: a.status,
-        published_at: a.publish_at ?? a.created_at,
-      })),
-    });
+        description: a.content,
+        published_at: (a.publish_at ?? a.created_at).slice(0, 10),
+        author_department: a.created_by || 'Chief Librarian Office',
+        status:
+          a.status === 'Published'
+            ? a.priority === 'Important' || a.priority === 'Urgent'
+              ? 'Attention Required'
+              : 'Published'
+            : a.status === 'Scheduled'
+              ? 'Scheduled'
+              : 'Draft',
+      }));
+    res.json({ items });
   });
 
   app.get('/api/librarian/dashboard/student-activity', ...requireStaff, (_req, res) => {
-    const students = service.state.users
-      .filter((u) => u.role === 'student')
-      .slice(0, 6)
-      .map((u) => service.toLibrarianStudentDirectoryItem(u));
-    res.json({ recent_registrations: students });
+    const items: StudentActivityPayload['items'] = [];
+    for (const b of service.state.borrowings.slice(0, 4)) {
+      const student = service.state.users.find((u) => u.user_id === b.student_id);
+      const book = service.state.books.find((bk) => bk.book_id === b.book_id);
+      if (!student || !book) continue;
+      items.push({
+        activity_id: `act-bor-${b.borrowing_id}`,
+        type: b.status === 'Returned' ? 'return' : 'borrowing',
+        student_name: student.full_name,
+        student_code: student.code,
+        book_title: book.title,
+        summary:
+          b.status === 'Returned'
+            ? `Returned "${book.title}" (${b.transaction_code}).`
+            : `Checked out "${book.title}" (due ${b.due_date}).`,
+        timestamp: b.return_date ?? b.issue_date,
+      });
+    }
+    for (const r of service.state.reservations.slice(0, 2)) {
+      const student = service.state.users.find((u) => u.user_id === r.student_id);
+      const book = service.state.books.find((bk) => bk.book_id === r.book_id);
+      if (!student || !book) continue;
+      items.push({
+        activity_id: `act-res-${r.reservation_id}`,
+        type: 'reservation',
+        student_name: student.full_name,
+        student_code: student.code,
+        book_title: book.title,
+        summary: `Reservation ${r.status.toLowerCase()} for "${book.title}".`,
+        timestamp: r.reservation_date,
+      });
+    }
+    for (const u of service.state.users.filter((x) => x.role === 'student').slice(0, 2)) {
+      items.push({
+        activity_id: `act-reg-${u.user_id}`,
+        type: 'new_registration',
+        student_name: u.full_name,
+        student_code: u.code,
+        book_title: null,
+        summary: `Registered student library profile (${u.department ?? 'Academic Program'}).`,
+        timestamp: u.created_at,
+      });
+    }
+    items.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+    const payload: StudentActivityPayload = { items: items.slice(0, 6) };
+    res.json(payload);
   });
 
   app.get('/api/librarian/dashboard/analytics', ...requireStaff, (_req, res) => {
@@ -650,16 +855,50 @@ export function createLibraryApp(service: LibraryService) {
     for (const b of service.state.books) {
       catMap.set(b.category, (catMap.get(b.category) ?? 0) + b.borrow_count);
     }
-    res.json({
-      top_categories: Array.from(catMap.entries())
-        .map(([category, count]) => ({ category, count }))
-        .sort((a, b) => b.count - a.count)
+
+    const now = new Date();
+    const monthPrefix = now.toISOString().slice(0, 7);
+    const issuedThisMonth = service.state.borrowings.filter((b) =>
+      b.issue_date.startsWith(monthPrefix)
+    ).length;
+    const returnedThisMonth = service.state.borrowings.filter(
+      (b) => b.status === 'Returned' && (b.return_date ?? '').startsWith(monthPrefix)
+    ).length;
+    const reservationsThisMonth = service.state.reservations.filter((r) =>
+      r.reservation_date.startsWith(monthPrefix)
+    ).length;
+
+    const monthShort = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const monthlyActivity: LibrarianAnalyticsPayload['monthly_borrowing_activity'] = [];
+    for (let offset = 5; offset >= 0; offset -= 1) {
+      const d = new Date(now.getFullYear(), now.getMonth() - offset, 1);
+      const prefix = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      monthlyActivity.push({
+        month: monthShort[d.getMonth()] ?? prefix,
+        issued: service.state.borrowings.filter((b) => b.issue_date.startsWith(prefix)).length,
+        returned: service.state.borrowings.filter(
+          (b) => b.status === 'Returned' && (b.return_date ?? '').startsWith(prefix)
+        ).length,
+      });
+    }
+
+    const payload: LibrarianAnalyticsPayload = {
+      has_sufficient_data: service.state.borrowings.length > 0 || service.state.books.length > 0,
+      books_issued_this_month: issuedThisMonth || service.state.borrowings.length,
+      books_returned_this_month:
+        returnedThisMonth || service.state.borrowings.filter((b) => b.status === 'Returned').length,
+      reservation_activity_this_month: reservationsThisMonth || service.state.reservations.length,
+      most_borrowed_categories: Array.from(catMap.entries())
+        .map(([category, borrow_count]) => ({ category, borrow_count }))
+        .sort((a, b) => b.borrow_count - a.borrow_count)
         .slice(0, 5),
-      most_borrowed: [...service.state.books]
+      most_borrowed_titles: [...service.state.books]
         .sort((a, b) => b.borrow_count - a.borrow_count)
         .slice(0, 5)
-        .map((b) => service.toInventoryBookItem(b)),
-    });
+        .map((b) => ({ book_id: b.book_id, title: b.title, borrow_count: b.borrow_count })),
+      monthly_borrowing_activity: monthlyActivity,
+    };
+    res.json(payload);
   });
 
   // Inventory & Books Management
@@ -786,10 +1025,16 @@ export function createLibraryApp(service: LibraryService) {
     ...requireStaff,
     asyncHandler((req, res) => {
       const b = req.body ?? {};
+      const authorsText = b.authors_display
+        ? String(b.authors_display)
+        : Array.isArray(b.authors)
+          ? b.authors.map(String).join(', ')
+          : String(b.authors ?? '');
+      const physicalCopies = Array.isArray(b.physical_copies) ? b.physical_copies : undefined;
       const created = service.createBookWithCopies({
         title: String(b.title ?? ''),
         subtitle: b.subtitle ? String(b.subtitle) : undefined,
-        authors: String(b.authors ?? ''),
+        authors: authorsText,
         isbn: String(b.isbn ?? ''),
         publisher: b.publisher ? String(b.publisher) : undefined,
         publication_year: Number(b.publication_year ?? 2025),
@@ -806,14 +1051,23 @@ export function createLibraryApp(service: LibraryService) {
         description: b.description ? String(b.description) : undefined,
         format: b.format || 'Hardcover',
         cover_image: b.cover_image ? String(b.cover_image) : undefined,
-        initial_copies: Number(b.initial_copies ?? b.copy_count ?? 1),
+        initial_copies: Number(
+          b.initial_copies ?? b.copy_count ?? (physicalCopies ? physicalCopies.length : 1)
+        ),
+        physical_copies: physicalCopies,
         branch: String(b.branch ?? 'Main Central Library'),
         floor: b.floor ? String(b.floor) : undefined,
         section: b.section ? String(b.section) : undefined,
         shelf: String(b.shelf ?? 'GEN-101'),
         actorName: req.currentUser!.full_name,
       });
-      res.status(201).json({ item: created, book: created });
+      res.status(201).json({
+        ...created,
+        copies_created: created.total_copies,
+        availability_status: created.available_copies > 0 ? 'Available' : 'Unavailable',
+        item: created,
+        book: created,
+      });
     })
   );
 
@@ -985,7 +1239,8 @@ export function createLibraryApp(service: LibraryService) {
     const sid = Number.parseInt(String(req.params.id), 10);
     const student = service.state.users.find((u) => u.user_id === sid && u.role === 'student');
     if (!student) throw new HttpError(404, 'Student not found.', 'STUDENT_NOT_FOUND');
-    res.json({ student: service.toCirculationStudentRecord(student) });
+    const mapped = service.toCirculationStudentRecord(student);
+    res.json({ ...mapped, student: mapped });
   });
 
   app.get('/api/librarian/books/:id/reservations', ...requireStaff, (req, res) => {
@@ -1031,10 +1286,20 @@ export function createLibraryApp(service: LibraryService) {
 
   app.get('/api/librarian/borrowings/active', ...requireStaff, (req, res) => {
     const search = String(req.query.search ?? req.query.q ?? '').trim().toLowerCase();
+    const statusFilter = String(req.query.status ?? 'all').trim().toLowerCase();
+    const includeReturned = req.query.include_returned === '1' || req.query.include_returned === 'true';
+    const today = new Date().toISOString().slice(0, 10);
+
     const items = service.state.borrowings
-      .filter((b) => b.status !== 'Returned')
+      .filter((b) => (includeReturned ? true : b.status !== 'Returned'))
       .map((b) => service.toActiveBorrowingDetail(b))
       .filter((d) => {
+        if (statusFilter === 'overdue' && d.status !== 'Overdue' && d.due_date >= today) {
+          return false;
+        }
+        if (statusFilter === 'due_today' && d.due_date !== today) {
+          return false;
+        }
         if (!search) return true;
         return `${d.transaction_code} ${d.student_name} ${d.student_code} ${d.book_title} ${d.accession_number} ${d.barcode ?? ''}`
           .toLowerCase()
@@ -1089,7 +1354,11 @@ export function createLibraryApp(service: LibraryService) {
     const id = Number.parseInt(String(req.params.id), 10);
     const r = service.state.reservations.find((x) => x.reservation_id === id);
     if (!r) throw new HttpError(404, 'Reservation not found.', 'NOT_FOUND');
-    res.json({ item: service.toLibrarianReservationItem(r) });
+    const mapped = service.toLibrarianReservationItem(r);
+    const availableCopies = service.state.copies
+      .filter((c) => c.book_id === r.book_id && c.status === 'Available')
+      .map((c) => service.toInventoryPhysicalCopy(c));
+    res.json({ reservation: mapped, item: mapped, available_copies: availableCopies });
   });
 
   app.post(
@@ -1235,7 +1504,7 @@ export function createLibraryApp(service: LibraryService) {
     const sid = Number.parseInt(String(req.params.id), 10);
     const student = service.state.users.find((u) => u.user_id === sid && u.role === 'student');
     if (!student) throw new HttpError(404, 'Student not found.', 'STUDENT_NOT_FOUND');
-    const nextStatus = String(req.body?.status ?? 'Active');
+    const nextStatus = String(req.body?.account_status ?? req.body?.status ?? 'Active');
     if (!['Active', 'Blocked', 'Suspended'].includes(nextStatus)) {
       throw new HttpError(400, 'Invalid account status.', 'INVALID_STATUS');
     }
@@ -1304,7 +1573,14 @@ export function createLibraryApp(service: LibraryService) {
         skipped.push(id);
       }
     }
-    res.json({ sent_ids: sent, skipped_ids: skipped, sent_count: sent.length });
+    res.json({
+      sent_ids: sent,
+      skipped_ids: skipped,
+      sent_count: sent.length,
+      succeeded_count: sent.length,
+      failed_count: 0,
+      skipped_duplicate_count: skipped.length,
+    });
   });
 
   // Librarian Announcements
@@ -1454,20 +1730,34 @@ export function createLibraryApp(service: LibraryService) {
 
   // Librarian Reports & Analytics
   app.get('/api/librarian/reports/summary', ...requireStaff, (_req, res) => {
-    res.json({
+    const payload: ReportsSourceDataset = {
       is_prototype_sample: false,
       books: service.state.books.map((b) => service.toInventoryBookItem(b)),
       copies: service.state.copies.map((c) => service.toInventoryPhysicalCopy(c)),
-      activeBorrowings: service.state.borrowings
-        .filter((b) => b.status !== 'Returned')
-        .map((b) => service.toActiveBorrowingDetail(b)),
-      returnedHistoryCount: service.state.borrowings.filter((b) => b.status === 'Returned').length,
+      borrowings: service.state.borrowings.map((b) => {
+        const detail = service.toActiveBorrowingDetail(b);
+        const book = service.state.books.find((bk) => bk.book_id === b.book_id);
+        return {
+          ...detail,
+          category: book?.category ?? 'General',
+          subject: book?.subject ?? 'General',
+          branch: book?.branch ?? 'Main Central Library',
+        };
+      }),
       overdueRecords: service.getOverdueRecords(),
       reservations: service.state.reservations.map((r) => service.toLibrarianReservationItem(r)),
       students: service.state.users
         .filter((u) => u.role === 'student')
-        .map((u) => service.toLibrarianStudentDirectoryItem(u)),
-    });
+        .map((u) => service.toCirculationStudentRecord(u)),
+      previousPeriodDeltas: null,
+      capabilities: {
+        can_export_csv: true,
+        can_export_pdf_backend: true,
+        supports_comparison_delta: false,
+        supports_overdue_trends: true,
+      },
+    };
+    res.json(payload);
   });
 
   app.get('/api/librarian/reports/export', ...requireStaff, (_req, res) => {
@@ -1491,65 +1781,80 @@ export function createLibraryApp(service: LibraryService) {
 
   // Librarian Profile & Sessions
   app.get('/api/librarian/profile', ...requireStaff, (req: AuthenticatedRequest, res) => {
-    const user = req.currentUser!;
-    const sessions = service.state.sessions
-      .filter((s) => s.user_id === user.user_id)
-      .map((s) => ({
-        session_id: s.session_id,
-        device_label: s.device_label,
-        browser_os: s.device_label,
-        ip_address: s.ip_address,
-        last_active_at: s.last_active_at,
-        is_current: s.session_id === req.currentSession?.session_id,
-      }));
-    res.json({
-      is_prototype_sample: false,
-      librarian: service.buildSessionPayload(user).librarian,
-      personal: {
-        full_name: user.full_name,
-        email: user.email,
-        mobile_number: user.mobile ?? '',
-        department_title: user.designation ?? 'Librarian',
-        branch_name: user.branch ?? 'Main Central Library',
-        joining_date: user.joining_date ?? user.created_at,
-      },
-      notification_preferences: user.librarian_notification_preferences ?? {
-        overdue_digest_enabled: true,
-        reservation_hold_alerts_enabled: true,
-        inventory_audit_alerts_enabled: true,
-        announcement_delivery_summary_enabled: true,
-        daily_circulation_summary_enabled: false,
-      },
-      sessions,
-    });
+    res.json(
+      service.buildLibrarianFullProfilePayload(
+        req.currentUser!,
+        req.currentSession?.session_id
+      )
+    );
   });
 
   app.put('/api/librarian/profile', ...requireStaff, (req: AuthenticatedRequest, res) => {
     const user = req.currentUser!;
-    if (req.body?.full_name) user.full_name = sanitizePlainText(String(req.body.full_name));
-    if (req.body?.department_title) user.designation = sanitizePlainText(String(req.body.department_title));
+    if (req.body?.full_name) {
+      user.full_name = sanitizePlainText(String(req.body.full_name));
+    }
+    if (req.body?.email) {
+      const nextEmail = String(req.body.email).trim().toLowerCase();
+      if (
+        service.state.users.some(
+          (u) => u.user_id !== user.user_id && u.email.toLowerCase() === nextEmail
+        )
+      ) {
+        throw new HttpError(
+          409,
+          'This email address is already linked to another account.',
+          'DUPLICATE_EMAIL'
+        );
+      }
+      user.email = nextEmail;
+    }
+    if (req.body?.department_title) {
+      user.designation = sanitizePlainText(String(req.body.department_title));
+    }
     if (typeof req.body?.mobile_number === 'string') {
       user.mobile = sanitizePlainText(req.body.mobile_number) || null;
+    } else if (req.body?.mobile_number === null) {
+      user.mobile = null;
+    }
+    if ('avatar_url' in (req.body ?? {})) {
+      const av = req.body.avatar_url;
+      user.avatar_url =
+        typeof av === 'string' && av.trim() ? av.trim() : null;
     }
     user.updated_at = new Date().toISOString();
     service.persist();
-    res.json({ ok: true, full_name: user.full_name });
+    res.json({
+      ok: true,
+      full_name: user.full_name,
+      librarian: service.buildSessionPayload(user).librarian,
+    });
   });
 
   app.put('/api/librarian/notification-preferences', ...requireStaff, (req: AuthenticatedRequest, res) => {
     const user = req.currentUser!;
-    user.librarian_notification_preferences = {
-      overdue_digest_enabled: Boolean(req.body?.overdue_digest_enabled ?? true),
-      reservation_hold_alerts_enabled: Boolean(req.body?.reservation_hold_alerts_enabled ?? true),
-      inventory_audit_alerts_enabled: Boolean(req.body?.inventory_audit_alerts_enabled ?? true),
-      announcement_delivery_summary_enabled: Boolean(
-        req.body?.announcement_delivery_summary_enabled ?? true
-      ),
-      daily_circulation_summary_enabled: Boolean(req.body?.daily_circulation_summary_enabled),
-    };
+    if (Array.isArray(req.body?.preferences)) {
+      user.librarian_notification_preferences = req.body.preferences;
+    } else {
+      user.librarian_notification_preferences = {
+        overdue_digest_enabled: Boolean(req.body?.overdue_digest_enabled ?? true),
+        reservation_hold_alerts_enabled: Boolean(req.body?.reservation_hold_alerts_enabled ?? true),
+        inventory_audit_alerts_enabled: Boolean(req.body?.inventory_audit_alerts_enabled ?? true),
+        announcement_delivery_summary_enabled: Boolean(
+          req.body?.announcement_delivery_summary_enabled ?? true
+        ),
+        daily_circulation_summary_enabled: Boolean(req.body?.daily_circulation_summary_enabled),
+      };
+    }
     user.updated_at = new Date().toISOString();
     service.persist();
-    res.json(user.librarian_notification_preferences);
+    res.json({
+      ok: true,
+      notification_preferences: service.buildLibrarianFullProfilePayload(
+        user,
+        req.currentSession?.session_id
+      ).notification_preferences,
+    });
   });
 
   app.put('/api/librarian/change-password', ...requireStaff, (req: AuthenticatedRequest, res) => {
@@ -1725,6 +2030,10 @@ export function createLibraryApp(service: LibraryService) {
     if (!student) throw new HttpError(404, 'Student not found.', 'NOT_FOUND');
     const b = req.body ?? {};
     if (b.full_name) student.full_name = sanitizePlainText(String(b.full_name));
+    if (b.email) student.email = String(b.email).trim().toLowerCase();
+    if ('mobile' in b) {
+      student.mobile = b.mobile ? sanitizePlainText(String(b.mobile)) : null;
+    }
     if (b.department) student.department = sanitizePlainText(String(b.department));
     if (b.program) student.program = sanitizePlainText(String(b.program));
     if (b.academic_year) student.academic_year = sanitizePlainText(String(b.academic_year));
@@ -1736,6 +2045,31 @@ export function createLibraryApp(service: LibraryService) {
       student.code,
       student.full_name,
       `Updated student academic profile (${student.department} · ${student.academic_year}).`
+    );
+    res.json({ item: service.toLibrarianStudentDirectoryItem(student) });
+  });
+
+  app.post('/api/admin/students/:id/status', ...requireAdmin, (req: AuthenticatedRequest, res) => {
+    const id = Number.parseInt(String(req.params.id), 10);
+    const student = service.state.users.find((u) => u.user_id === id && u.role === 'student');
+    if (!student) throw new HttpError(404, 'Student not found.', 'NOT_FOUND');
+    const nextStatus = String(req.body?.account_status ?? req.body?.status ?? 'Active');
+    if (!['Active', 'Blocked', 'Suspended'].includes(nextStatus)) {
+      throw new HttpError(400, 'Invalid account status.', 'INVALID_STATUS');
+    }
+    student.account_status = nextStatus as DbUser['account_status'];
+    student.restriction_reason =
+      nextStatus === 'Active'
+        ? null
+        : sanitizePlainText(String(req.body?.reason ?? 'Account restricted by administrator.'));
+    student.updated_at = new Date().toISOString();
+    service.recordAdminAudit(
+      req.currentUser!,
+      `Set Student Account Status to ${nextStatus}`,
+      'student',
+      student.code,
+      student.full_name,
+      student.restriction_reason ?? `Account marked ${nextStatus}.`
     );
     res.json({ item: service.toLibrarianStudentDirectoryItem(student) });
   });
@@ -1959,6 +2293,28 @@ export function createLibraryApp(service: LibraryService) {
       `Branch status: ${br.status}.`
     );
     res.json({ item: br });
+  });
+
+  app.delete('/api/admin/branches/:id', ...requireAdmin, (req: AuthenticatedRequest, res) => {
+    const id = Number.parseInt(String(req.params.id), 10);
+    const br = service.state.branches.find((b) => b.branch_id === id);
+    if (!br) throw new HttpError(404, 'Branch not found.', 'NOT_FOUND');
+    const used =
+      service.state.books.some((b) => b.branch.toLowerCase() === br.name.toLowerCase()) ||
+      service.state.copies.some((c) => c.branch.toLowerCase() === br.name.toLowerCase());
+    if (used) {
+      throw new HttpError(409, 'Branch is currently referenced by catalog books or copies.', 'IN_USE');
+    }
+    service.state.branches = service.state.branches.filter((b) => b.branch_id !== id);
+    service.recordAdminAudit(
+      req.currentUser!,
+      'Delete Branch',
+      'branch',
+      br.code,
+      br.name,
+      'Removed unused branch location.'
+    );
+    res.json({ deleted: true });
   });
 
   // Library Policy Settings

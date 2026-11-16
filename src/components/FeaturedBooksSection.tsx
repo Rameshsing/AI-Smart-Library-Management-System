@@ -1,6 +1,8 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { ArrowRight, BookX, Search } from 'lucide-react';
-import { DEMO_BOOKS, type AppRoute } from '../data/libraryData';
+import { DEMO_BOOKS, type AppRoute, type DemoBook } from '../data/libraryData';
+import { getApiBaseUrl, isBackendConnected } from '../utils/apiConfig';
+import type { CatalogBook } from '../utils/bookCatalog';
 import { filterDemoBooks, getBookCategories } from '../utils/catalogSearch';
 import { BookCard } from './BookCard';
 
@@ -13,6 +15,31 @@ interface FeaturedBooksSectionProps {
   onNavigate: (route: AppRoute) => void;
 }
 
+export function mapCatalogBookToCard(b: CatalogBook): DemoBook {
+  const status: DemoBook['status'] =
+    b.available_copies <= 0
+      ? 'Checked Out'
+      : b.available_copies === 1
+        ? 'Limited'
+        : 'Available';
+  return {
+    id: String(b.book_id),
+    slug: b.slug || String(b.book_id),
+    title: b.title,
+    author: b.author,
+    category: b.category,
+    status,
+    availableCopies: b.available_copies,
+    totalCopies: b.total_copies,
+    shelfCode: b.subject || b.category || 'Library Stacks',
+    publicationYear: b.publication_year,
+    isbnPlaceholder: b.isbn,
+    summary: b.description,
+    keywords: Array.isArray(b.keywords) ? b.keywords : [],
+    coverImage: b.cover_image,
+  };
+}
+
 export function FeaturedBooksSection({
   searchQuery,
   selectedCategory,
@@ -21,8 +48,34 @@ export function FeaturedBooksSection({
   onClearFilters,
   onNavigate,
 }: FeaturedBooksSectionProps) {
-  const categories = getBookCategories(DEMO_BOOKS);
-  const filteredBooks = filterDemoBooks(DEMO_BOOKS, searchQuery, selectedCategory);
+  const [books, setBooks] = useState<DemoBook[]>(DEMO_BOOKS);
+  const [isLiveCatalog, setIsLiveCatalog] = useState(false);
+  const connected = isBackendConnected();
+  const apiBaseUrl = getApiBaseUrl();
+
+  useEffect(() => {
+    if (!connected) return;
+    let active = true;
+    fetch(`${apiBaseUrl.replace(/\/+$/, '')}/api/books?limit=12`, {
+      headers: { Accept: 'application/json' },
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: { items?: CatalogBook[] } | null) => {
+        if (active && data?.items && data.items.length > 0) {
+          setBooks(data.items.slice(0, 6).map(mapCatalogBookToCard));
+          setIsLiveCatalog(true);
+        }
+      })
+      .catch(() => {
+        // Keep initial books gracefully
+      });
+    return () => {
+      active = false;
+    };
+  }, [apiBaseUrl, connected]);
+
+  const categories = getBookCategories(books);
+  const filteredBooks = filterDemoBooks(books, searchQuery, selectedCategory);
   const hasActiveFilter = searchQuery.trim().length > 0 || selectedCategory !== 'All';
 
   return (
@@ -44,7 +97,9 @@ export function FeaturedBooksSection({
               Discover popular books and learning resources across different subjects.
             </p>
             <p className="mt-1 text-xs text-slate-500">
-              Sample catalogue preview — all titles below represent demo records ready for database connection.
+              {isLiveCatalog
+                ? 'Live library catalog — real-time shelf availability and ratings updated from the database.'
+                : 'Sample catalogue preview — live availability updates automatically from the catalog.'}
             </p>
           </div>
 
@@ -62,7 +117,7 @@ export function FeaturedBooksSection({
         <div className="mt-8 flex flex-col gap-4 border-b border-slate-200 pb-5 lg:flex-row lg:items-center lg:justify-between">
           <div
             role="tablist"
-            aria-label="Filter demo books by subject"
+            aria-label="Filter library books by subject"
             className="flex flex-wrap items-center gap-1.5 rounded-lg bg-[#F5F8FC] p-1"
           >
             {categories.map((category) => {
@@ -88,7 +143,7 @@ export function FeaturedBooksSection({
 
           <div className="relative w-full lg:w-72">
             <label htmlFor="catalog-inline-search" className="sr-only">
-              Filter demo books
+              Filter library books
             </label>
             <Search
               className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"
@@ -99,7 +154,7 @@ export function FeaturedBooksSection({
               type="search"
               value={searchQuery}
               onChange={(e) => onSearchChange(e.target.value)}
-              placeholder="Filter displayed demo books..."
+              placeholder="Filter displayed books..."
               className="min-h-[42px] w-full rounded-lg border border-slate-200 bg-white pl-9 pr-3 text-sm text-[#1E293B] placeholder:text-slate-400 focus:border-[#2563EB] focus:outline-none focus:ring-2 focus:ring-[#DBEAFE]"
             />
           </div>
@@ -112,7 +167,7 @@ export function FeaturedBooksSection({
             className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[#DBEAFE] bg-[#F5F8FC] px-4 py-3 text-sm text-[#142B4A]"
           >
             <span>
-              Showing <strong className="font-mono-tabular">{filteredBooks.length}</strong> demo{' '}
+              Showing <strong className="font-mono-tabular">{filteredBooks.length}</strong>{' '}
               {filteredBooks.length === 1 ? 'book' : 'books'}
               {searchQuery.trim() ? ` matching "${searchQuery.trim()}"` : ''}
               {selectedCategory !== 'All' ? ` in ${selectedCategory}` : ''}.
@@ -137,6 +192,7 @@ export function FeaturedBooksSection({
               <BookCard
                 key={book.id}
                 book={book}
+                isLive={isLiveCatalog}
                 onViewDetails={(slug) => onNavigate({ name: 'book-detail', slug })}
               />
             ))}
@@ -145,10 +201,10 @@ export function FeaturedBooksSection({
           <div className="mt-8 flex flex-col items-center justify-center rounded-xl border border-slate-200 bg-[#F5F8FC] px-6 py-14 text-center">
             <BookX className="h-10 w-10 text-slate-400" aria-hidden="true" />
             <h3 className="font-display mt-3 text-lg font-semibold text-[#142B4A]">
-              No matching demo books found
+              No matching books found
             </h3>
             <p className="mt-1 max-w-md text-sm text-slate-600">
-              We could not find any sample titles matching your current search or subject filter.
+              We could not find any titles matching your current search or subject filter.
             </p>
             <button
               type="button"
@@ -163,3 +219,4 @@ export function FeaturedBooksSection({
     </section>
   );
 }
+

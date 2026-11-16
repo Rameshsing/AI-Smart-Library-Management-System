@@ -1,7 +1,80 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { DEMO_LIBRARY_METRICS } from '../data/libraryData';
+import { getApiBaseUrl, isBackendConnected } from '../utils/apiConfig';
+
+interface PublicOverviewMetrics {
+  total_books: number;
+  total_copies: number;
+  available_copies: number;
+  active_students: number;
+  categories_count: number;
+  branches_count: number;
+}
 
 export function LibraryStatsSection() {
+  const [liveMetrics, setLiveMetrics] = useState<PublicOverviewMetrics | null>(null);
+  const connected = isBackendConnected();
+  const apiBaseUrl = getApiBaseUrl();
+
+  useEffect(() => {
+    if (!connected) return;
+    let active = true;
+    fetch(`${apiBaseUrl.replace(/\/+$/, '')}/api/public/overview`, {
+      headers: { Accept: 'application/json' },
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: { metrics?: PublicOverviewMetrics } | null) => {
+        if (active && data?.metrics) {
+          setLiveMetrics(data.metrics);
+        }
+      })
+      .catch(() => {
+        // Keep graceful fallback
+      });
+    return () => {
+      active = false;
+    };
+  }, [apiBaseUrl, connected]);
+
+  const cards = liveMetrics
+    ? [
+        {
+          id: 'total-books',
+          label: 'Total Catalog Titles',
+          value: String(liveMetrics.total_books),
+          badge: 'Live',
+          note: `${liveMetrics.total_copies} physical & digital copies tracked`,
+        },
+        {
+          id: 'available-copies',
+          label: 'Available Copies',
+          value: String(liveMetrics.available_copies),
+          badge: 'Live',
+          note: 'Ready for immediate desk issue or reading',
+        },
+        {
+          id: 'active-students',
+          label: 'Active Students',
+          value: String(liveMetrics.active_students),
+          badge: 'Live',
+          note: 'Verified university student accounts',
+        },
+        {
+          id: 'categories',
+          label: 'Subjects & Branches',
+          value: `${liveMetrics.categories_count} · ${liveMetrics.branches_count}`,
+          badge: 'Live',
+          note: 'Active catalog categories across campus branches',
+        },
+      ]
+    : DEMO_LIBRARY_METRICS.map((m) => ({
+        id: m.id,
+        label: m.label,
+        value: m.demoValue,
+        badge: 'Sample',
+        note: m.placeholderNote,
+      }));
+
   return (
     <section
       aria-labelledby="library-stats-heading"
@@ -17,28 +90,30 @@ export function LibraryStatsSection() {
               Library Overview
             </h2>
             <p className="text-xs text-slate-500 sm:text-sm">
-              Demo placeholder metrics shown below — live statistics will populate directly from the MySQL library database.
+              {liveMetrics
+                ? 'Real-time circulation, catalog inventory, and student engagement metrics from the library database.'
+                : 'Connecting to live catalog inventory and student circulation statistics.'}
             </p>
           </div>
           <span className="font-mono-tabular text-xs font-medium text-slate-500">
-            Sample Preview Data
+            {liveMetrics ? 'Live Database Metrics' : 'Sample Preview Data'}
           </span>
         </div>
 
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          {DEMO_LIBRARY_METRICS.map((metric) => (
+          {cards.map((metric) => (
             <div
               key={metric.id}
               className="rounded-xl border border-slate-200/90 bg-white p-5 shadow-xs"
             >
               <div className="flex items-baseline justify-between gap-2">
                 <span className="text-sm font-medium text-slate-600">{metric.label}</span>
-                <span className="text-[11px] font-medium text-[#2563EB]">Demo</span>
+                <span className="text-[11px] font-medium text-[#2563EB]">{metric.badge}</span>
               </div>
               <p className="font-mono-tabular mt-2 text-3xl font-bold tracking-tight text-[#142B4A]">
-                {metric.demoValue}
+                {metric.value}
               </p>
-              <p className="mt-1.5 text-xs text-slate-500">{metric.placeholderNote}</p>
+              <p className="mt-1.5 text-xs text-slate-500">{metric.note}</p>
             </div>
           ))}
         </div>
@@ -46,3 +121,4 @@ export function LibraryStatsSection() {
     </section>
   );
 }
+

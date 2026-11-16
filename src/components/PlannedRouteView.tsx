@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   ArrowLeft,
   BookOpen,
@@ -10,13 +10,19 @@ import {
   Database,
   Sparkles,
 } from 'lucide-react';
-import { DEMO_BOOKS, type AppRoute } from '../data/libraryData';
+import { DEMO_BOOKS, type AppRoute, type DemoBook } from '../data/libraryData';
+import { getApiBaseUrl, isBackendConnected } from '../utils/apiConfig';
 import { findDemoBookBySlug } from '../utils/catalogSearch';
-import { findCatalogBookByIdentifier, getBookAvailabilityInfo } from '../utils/bookCatalog';
+import {
+  findCatalogBookByIdentifier,
+  getBookAvailabilityInfo,
+  type CatalogBook,
+} from '../utils/bookCatalog';
 import type { StudentSectionRoute } from '../utils/studentDashboard';
 import type { LibrarianSectionRoute } from '../utils/librarianDashboard';
 import type { AdminSectionRoute } from '../utils/adminDashboard';
 import { BookCard } from './BookCard';
+import { mapCatalogBookToCard } from './FeaturedBooksSection';
 
 interface PlannedRouteViewProps {
   route: Exclude<AppRoute, { name: 'home' }>;
@@ -152,8 +158,32 @@ const ROUTE_PLACEHOLDERS: Record<
 
 export function PlannedRouteView({ route, onNavigate }: PlannedRouteViewProps) {
   const [coverError, setCoverError] = useState(false);
+  const [liveCatalogCards, setLiveCatalogCards] = useState<DemoBook[] | null>(null);
+  const connected = isBackendConnected();
+  const apiBaseUrl = getApiBaseUrl();
+
+  useEffect(() => {
+    if (!connected || route.name !== 'books') return;
+    let active = true;
+    fetch(`${apiBaseUrl.replace(/\/+$/, '')}/api/books?limit=30`, {
+      headers: { Accept: 'application/json' },
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: { items?: CatalogBook[] } | null) => {
+        if (active && data?.items) {
+          setLiveCatalogCards(data.items.map(mapCatalogBookToCard));
+        }
+      })
+      .catch(() => {
+        // Keep demo fallback on network failure
+      });
+    return () => {
+      active = false;
+    };
+  }, [apiBaseUrl, connected, route.name]);
 
   if (route.name === 'books') {
+    const displayBooks = liveCatalogCards ?? DEMO_BOOKS;
     return (
       <section className="bg-white py-12 sm:py-16">
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
@@ -169,31 +199,40 @@ export function PlannedRouteView({ route, onNavigate }: PlannedRouteViewProps) {
           <div className="mt-6 flex flex-col justify-between gap-4 border-b border-slate-200 pb-6 md:flex-row md:items-end">
             <div>
               <p className="font-mono-tabular text-xs font-medium text-[#2563EB]">
-                Destination Route: /books
+                Catalog Directory · /books
               </p>
               <h1 className="font-display mt-1 text-3xl font-bold tracking-tight text-[#142B4A]">
-                Book Catalogue Preview
+                Library Book Catalogue
               </h1>
               <p className="mt-2 max-w-2xl text-sm text-slate-600">
-                Clean catalogue route destination displaying sample demo book records. Full
-                pagination, MySQL query filtering, and reservation actions will be enabled in the
-                catalogue module.
+                Browse live university library holdings, check real-time copy availability, and
+                sign in as a student to borrow or reserve titles.
               </p>
             </div>
-            <button
-              type="button"
-              onClick={() => onNavigate({ name: 'signup' })}
-              className="inline-flex min-h-[44px] items-center justify-center rounded-lg bg-[#2563EB] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[#1D4ED8] whitespace-nowrap shrink-0 cursor-pointer"
-            >
-              Create Student Account
-            </button>
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                onClick={() => onNavigate({ name: 'login' })}
+                className="inline-flex min-h-[44px] items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-[#142B4A] hover:border-[#2563EB] hover:text-[#2563EB] whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                Student Sign In
+              </button>
+              <button
+                type="button"
+                onClick={() => onNavigate({ name: 'signup' })}
+                className="inline-flex min-h-[44px] items-center justify-center rounded-lg bg-[#2563EB] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[#1D4ED8] whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                Create Student Account
+              </button>
+            </div>
           </div>
 
           <div className="mt-8 grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
-            {DEMO_BOOKS.map((book) => (
+            {displayBooks.map((book) => (
               <BookCard
                 key={book.id}
                 book={book}
+                isLive={Boolean(liveCatalogCards)}
                 onViewDetails={(slug) => onNavigate({ name: 'book-detail', slug })}
               />
             ))}

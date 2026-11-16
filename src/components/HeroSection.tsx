@@ -84,7 +84,7 @@ export function HeroSection({
                 </button>
               </div>
               <p className="mt-2 text-xs text-slate-500">
-                Try searching demo titles such as &ldquo;Algorithms&rdquo;, &ldquo;Data Science&rdquo;, or &ldquo;Vance&rdquo;.
+                Try searching library titles such as &ldquo;Algorithms&rdquo;, &ldquo;Data Science&rdquo;, or &ldquo;Vance&rdquo;.
               </p>
             </form>
 

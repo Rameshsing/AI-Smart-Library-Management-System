@@ -4,10 +4,11 @@ import type { DemoBook } from '../data/libraryData';
 
 interface BookCardProps {
   book: DemoBook;
+  isLive?: boolean;
   onViewDetails: (slug: string) => void;
 }
 
-export function BookCard({ book, onViewDetails }: BookCardProps) {
+export function BookCard({ book, isLive = false, onViewDetails }: BookCardProps) {
   const [imgError, setImgError] = useState(false);
 
   const availabilityMeta = (() => {
@@ -60,7 +61,7 @@ export function BookCard({ book, onViewDetails }: BookCardProps) {
           <span aria-hidden="true">·</span>
           <span className="font-mono-tabular">{book.shelfCode}</span>
           <span aria-hidden="true">·</span>
-          <span>Demo Record</span>
+          <span>{isLive ? 'Catalog Item' : 'Demo Record'}</span>
         </div>
 
         <h3 className="font-display mt-2 line-clamp-2 text-lg font-semibold leading-snug text-[#142B4A]">

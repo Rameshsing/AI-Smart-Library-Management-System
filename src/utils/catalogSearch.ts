@@ -63,15 +63,15 @@ export function parseRouteFromPathname(pathname: string): AppRoute {
   if (clean === '/login') return { name: 'login' };
   if (clean === '/signup') return { name: 'signup' };
   if (clean === '/admin-login') return { name: 'admin-login' };
-  if (clean === '/student-dashboard') return { name: 'student-dashboard' };
+  if (clean === '/student-dashboard' || clean === '/student/dashboard') return { name: 'student-dashboard' };
   if (clean === '/student/search') return { name: 'student-search' };
   if (clean === '/student/recommendations') return { name: 'student-recommendations' };
   if (clean === '/student/my-books') return { name: 'student-my-books' };
-  if (clean === '/student/history') return { name: 'student-history' };
+  if (clean === '/student/history' || clean === '/student/reading-history') return { name: 'student-history' };
   if (clean === '/student/reservations') return { name: 'student-reservations' };
   if (clean === '/student/notifications') return { name: 'student-notifications' };
   if (clean === '/student/profile') return { name: 'student-profile' };
-  if (clean === '/librarian-dashboard') return { name: 'librarian-dashboard' };
+  if (clean === '/librarian-dashboard' || clean === '/librarian/dashboard') return { name: 'librarian-dashboard' };
   if (clean === '/librarian/inventory') return { name: 'librarian-inventory' };
   if (clean === '/librarian/books/new') return { name: 'librarian-add-book' };
   if (clean === '/librarian/issue-books') return { name: 'librarian-issue-books' };

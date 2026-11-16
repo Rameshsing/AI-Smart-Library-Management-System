@@ -175,14 +175,14 @@ export function Footer({ onNavigate }: FooterProps) {
                 <h3 className="font-display text-sm font-semibold text-[#142B4A]">Contact</h3>
                 <ul className="mt-4 space-y-2.5 text-sm text-slate-600">
                   <li>
-                    <span className="block text-xs font-medium text-slate-500">Email Placeholder</span>
-                    <span>[library-support@institution.edu]</span>
+                    <span className="block text-xs font-medium text-slate-500">Support Email</span>
+                    <span>library-support@smartlibrary.edu</span>
                   </li>
                   <li>
                     <span className="block text-xs font-medium text-slate-500">
-                      Institute Information Placeholder
+                      Main Campus Library
                     </span>
-                    <span>[Educational Institution &amp; Library Wing]</span>
+                    <span>National Institute of Digital Engineering</span>
                   </li>
                 </ul>
               </div>
@@ -192,7 +192,7 @@ export function Footer({ onNavigate }: FooterProps) {
 
         <div className="mt-12 flex flex-col items-start justify-between gap-4 border-t border-slate-200 pt-8 text-xs text-slate-500 sm:flex-row sm:items-center">
           <p>&copy; 2026 AI Smart Library. All Rights Reserved.</p>
-          <p>Welcome Page Preview · Prepared for Flask, MySQL &amp; Python Recommendation Engine</p>
+          <p>Intelligent Library Management &amp; Personalized Recommendation Platform</p>
         </div>
       </div>
     </footer>

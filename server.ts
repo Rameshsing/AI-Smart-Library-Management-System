@@ -27,6 +27,13 @@ async function startServer() {
   const app = createLibraryApp(service);
   const isProduction = process.env.NODE_ENV === 'production';
 
+  app.use(
+    '/src/assets/images',
+    express.static(path.resolve(process.cwd(), 'src/assets/images'), {
+      maxAge: isProduction ? '7d' : 0,
+    })
+  );
+
   if (!isProduction) {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({

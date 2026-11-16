@@ -63,6 +63,8 @@ export function OverdueBooksPage({ permissions, onNavigate }: OverdueBooksPagePr
 
   const sampleStoreRef = useRef(createSampleOverdueStore());
   const [policy, setPolicy] = useState<OverduePolicyCapabilities>(sampleStoreRef.current.policy);
+  const policyRef = useRef(policy);
+  policyRef.current = policy;
   const [records, setRecords] = useState<OverdueRecordItem[]>(sampleStoreRef.current.records);
   const [totalCount, setTotalCount] = useState(sampleStoreRef.current.records.length);
   const [page, setPage] = useState(1);
@@ -145,7 +147,7 @@ export function OverdueBooksPage({ permissions, onNavigate }: OverdueBooksPagePr
       const result = filterAndSortOverdueRecords(
         sampleStoreRef.current.records,
         filterCriteria,
-        policy,
+        policyRef.current,
         page,
         PAGE_SIZE
       );
@@ -156,7 +158,7 @@ export function OverdueBooksPage({ permissions, onNavigate }: OverdueBooksPagePr
 
     setIsLoading(true);
     try {
-      const params = buildOverdueApiQueryParams(filterCriteria, policy, page, PAGE_SIZE);
+      const params = buildOverdueApiQueryParams(filterCriteria, policyRef.current, page, PAGE_SIZE);
       const res = await fetch(
         `${apiBaseUrl.replace(/\/+$/, '')}/api/librarian/overdue?${params.toString()}`,
         {
@@ -194,7 +196,7 @@ export function OverdueBooksPage({ permissions, onNavigate }: OverdueBooksPagePr
     } finally {
       setIsLoading(false);
     }
-  }, [apiBaseUrl, filterCriteria, hasBackendApi, onNavigate, page, policy]);
+  }, [apiBaseUrl, filterCriteria, hasBackendApi, onNavigate, page]);
 
   useEffect(() => {
     void fetchOverdueRecords();

@@ -77,7 +77,7 @@ export function AboutSection() {
                     Organized Library Workflows
                   </h3>
                   <p className="mt-1 text-xs leading-relaxed text-slate-600">
-                    Supports inventory visibility, reservation tracking, and structured MySQL catalog
+                    Supports inventory visibility, reservation tracking, and real-time catalog
                     administration.
                   </p>
                 </div>

@@ -26,6 +26,8 @@ import {
   type PermissionKey,
   type StaffAccountStatus,
 } from '../../utils/adminManagement';
+import { getApiBaseUrl, isBackendConnected } from '../../utils/apiConfig';
+import type { ChangePasswordDraft } from '../../utils/studentProfilePage';
 import { AddBookPage } from '../librarian/AddBookPage';
 import { LibrarianInventoryPage } from '../librarian/LibrarianInventoryPage';
 import { ReportsAnalyticsPage } from '../librarian/ReportsAnalyticsPage';
@@ -71,8 +73,12 @@ export function AdminDashboardPage({
   );
   const [isCheckingSession, setIsCheckingSession] = useState<boolean>(true);
   const [unauthorizedMessage, setUnauthorizedMessage] = useState<string | null>(null);
+  const [syncError, setSyncError] = useState<string | null>(null);
   const [quickSearchQuery, setQuickSearchQuery] = useState('');
   const [openCreateStaffRequested, setOpenCreateStaffRequested] = useState(false);
+
+  const apiBaseUrl = getApiBaseUrl();
+  const hasBackendApi = isBackendConnected();
 
   const unsavedLeaveGuardRef = useRef<((targetRoute: AppRoute) => boolean) | null>(null);
   const onNavigateRef = useRef(onNavigate);
@@ -80,21 +86,45 @@ export function AdminDashboardPage({
     onNavigateRef.current = onNavigate;
   }, [onNavigate]);
 
-  // Persist workspace mutations across same-session page reloads
+  // Persist workspace mutations locally only when running in offline/preview mode
   useEffect(() => {
+    if (hasBackendApi) return;
     try {
       window.sessionStorage.setItem(ADMIN_STORE_STORAGE_KEY, JSON.stringify(store));
     } catch {
       // Ignore storage quota / privacy mode restrictions
     }
-  }, [store]);
+  }, [hasBackendApi, store]);
 
-  // Server-verified Admin session check (fail closed when backend API is configured)
+  const refreshAdminWorkspace = useCallback(
+    async (signal?: AbortSignal) => {
+      if (!hasBackendApi) return;
+      const wsRes = await fetch(
+        `${apiBaseUrl.replace(/\/+$/, '')}/api/admin/workspace`,
+        {
+          method: 'GET',
+          credentials: 'include',
+          signal,
+          headers: { Accept: 'application/json' },
+        }
+      );
+      if (wsRes.ok) {
+        const wsData = (await wsRes.json()) as Partial<AdminWorkspaceStore>;
+        setStore((prev) => ({
+          ...prev,
+          ...wsData,
+          reportsDataset: wsData.reportsDataset ?? prev.reportsDataset,
+        }));
+      }
+    },
+    [apiBaseUrl, hasBackendApi]
+  );
+
+  // Server-verified Admin session check & live workspace hydration
   useEffect(() => {
     const controller = new AbortController();
-    const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim();
 
-    if (!apiBaseUrl) {
+    if (!hasBackendApi) {
       setUnauthorizedMessage(null);
       setIsCheckingSession(false);
       return;
@@ -103,7 +133,7 @@ export function AdminDashboardPage({
     const verify = async () => {
       try {
         setIsCheckingSession(true);
-        const res = await fetch(`${apiBaseUrl}/api/auth/me`, {
+        const res = await fetch(`${apiBaseUrl.replace(/\/+$/, '')}/api/auth/me`, {
           method: 'GET',
           credentials: 'include',
           signal: controller.signal,
@@ -129,6 +159,7 @@ export function AdminDashboardPage({
         if (payload.admin) {
           setStore((prev) => ({ ...prev, adminProfile: payload.admin! }));
         }
+        await refreshAdminWorkspace(controller.signal);
         setUnauthorizedMessage(null);
       } catch {
         if (!controller.signal.aborted) {
@@ -146,7 +177,7 @@ export function AdminDashboardPage({
 
     void verify();
     return () => controller.abort();
-  }, []);
+  }, [apiBaseUrl, hasBackendApi, refreshAdminWorkspace]);
 
   const handleGuardedNavigate = useCallback(
     (targetRoute: AppRoute) => {
@@ -159,10 +190,9 @@ export function AdminDashboardPage({
   );
 
   const handleLogout = async () => {
-    const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim();
-    if (apiBaseUrl) {
+    if (hasBackendApi) {
       try {
-        await fetch(`${apiBaseUrl}/api/auth/logout`, {
+        await fetch(`${apiBaseUrl.replace(/\/+$/, '')}/api/auth/logout`, {
           method: 'POST',
           credentials: 'include',
         });
@@ -172,6 +202,39 @@ export function AdminDashboardPage({
     }
     onNavigate({ name: 'admin-login' });
   };
+
+  const syncAdminMutation = useCallback(
+    async (path: string, method: 'POST' | 'PUT' | 'DELETE', body?: unknown) => {
+      if (!hasBackendApi) return;
+      setSyncError(null);
+      try {
+        const res = await fetch(`${apiBaseUrl.replace(/\/+$/, '')}${path}`, {
+          method,
+          credentials: 'include',
+          headers: {
+            'Content-Type': 'application/json',
+            Accept: 'application/json',
+          },
+          body: body !== undefined ? JSON.stringify(body) : undefined,
+        });
+        if (!res.ok) {
+          const errJson = (await res.json().catch(() => null)) as {
+            message?: string;
+            error?: string;
+          } | null;
+          setSyncError(
+            errJson?.message ?? errJson?.error ?? `Administrator action failed (${res.status}).`
+          );
+        }
+        await refreshAdminWorkspace();
+      } catch (err) {
+        setSyncError(
+          err instanceof Error ? err.message : 'Unable to sync change to server.'
+        );
+      }
+    },
+    [apiBaseUrl, hasBackendApi, refreshAdminWorkspace]
+  );
 
   const alerts = useMemo(
     () =>
@@ -264,6 +327,7 @@ export function AdminDashboardPage({
       auditLogs: [auditEntry, ...prev.auditLogs],
     }));
 
+    void syncAdminMutation('/api/admin/staff', 'POST', input);
     return { ok: true };
   };
 
@@ -311,6 +375,7 @@ export function AdminDashboardPage({
       auditLogs: [auditEntry, ...prev.auditLogs],
     }));
 
+    void syncAdminMutation(`/api/admin/staff/${staffId}`, 'PUT', updates);
     return { ok: true };
   };
 
@@ -348,6 +413,9 @@ export function AdminDashboardPage({
       auditLogs: [auditEntry, ...prev.auditLogs],
     }));
 
+    void syncAdminMutation(`/api/admin/staff/${staffId}/status`, 'POST', {
+      status: nextStatus,
+    });
     return { ok: true };
   };
 
@@ -379,6 +447,7 @@ export function AdminDashboardPage({
       ),
       auditLogs: [auditEntry, ...prev.auditLogs],
     }));
+    void syncAdminMutation(`/api/admin/staff/${staffId}/reset-password`, 'POST', {});
   };
 
   // Student mutations + audit logging
@@ -429,6 +498,7 @@ export function AdminDashboardPage({
       auditLogs: [auditEntry, ...prev.auditLogs],
     }));
 
+    void syncAdminMutation(`/api/admin/students/${studentId}`, 'PUT', updates);
     return { ok: true };
   };
 
@@ -458,6 +528,10 @@ export function AdminDashboardPage({
       ),
       auditLogs: [auditEntry, ...prev.auditLogs],
     }));
+    void syncAdminMutation(`/api/admin/students/${studentId}/status`, 'POST', {
+      account_status: nextStatus,
+      reason,
+    });
   };
 
   const handleDeleteStudent = (studentId: number): { ok: boolean; error?: string } => {
@@ -483,6 +557,7 @@ export function AdminDashboardPage({
       students: prev.students.filter((s) => s.student_id !== studentId),
       auditLogs: [auditEntry, ...prev.auditLogs],
     }));
+    void syncAdminMutation(`/api/admin/students/${studentId}`, 'DELETE');
     return { ok: true };
   };
 
@@ -555,6 +630,13 @@ export function AdminDashboardPage({
       }));
     }
 
+    void syncAdminMutation(
+      input.category_id
+        ? `/api/admin/categories/${input.category_id}`
+        : '/api/admin/categories',
+      input.category_id ? 'PUT' : 'POST',
+      input
+    );
     return { ok: true };
   };
 
@@ -584,6 +666,7 @@ export function AdminDashboardPage({
       categories: prev.categories.filter((c) => c.category_id !== categoryId),
       auditLogs: [auditEntry, ...prev.auditLogs],
     }));
+    void syncAdminMutation(`/api/admin/categories/${categoryId}`, 'DELETE');
     return { ok: true };
   };
 
@@ -658,6 +741,13 @@ export function AdminDashboardPage({
         auditLogs: [auditEntry, ...prev.auditLogs],
       }));
     }
+    void syncAdminMutation(
+      input.subject_id
+        ? `/api/admin/subjects/${input.subject_id}`
+        : '/api/admin/subjects',
+      input.subject_id ? 'PUT' : 'POST',
+      input
+    );
     return { ok: true };
   };
 
@@ -687,6 +777,7 @@ export function AdminDashboardPage({
       subjects: prev.subjects.filter((s) => s.subject_id !== subjectId),
       auditLogs: [auditEntry, ...prev.auditLogs],
     }));
+    void syncAdminMutation(`/api/admin/subjects/${subjectId}`, 'DELETE');
     return { ok: true };
   };
 
@@ -754,6 +845,13 @@ export function AdminDashboardPage({
         auditLogs: [auditEntry, ...prev.auditLogs],
       }));
     }
+    void syncAdminMutation(
+      input.branch_id
+        ? `/api/admin/branches/${input.branch_id}`
+        : '/api/admin/branches',
+      input.branch_id ? 'PUT' : 'POST',
+      input
+    );
     return { ok: true };
   };
 
@@ -788,6 +886,7 @@ export function AdminDashboardPage({
       branches: prev.branches.filter((b) => b.branch_id !== branchId),
       auditLogs: [auditEntry, ...prev.auditLogs],
     }));
+    void syncAdminMutation(`/api/admin/branches/${branchId}`, 'DELETE');
     return { ok: true };
   };
 
@@ -824,6 +923,7 @@ export function AdminDashboardPage({
       },
       auditLogs: [auditEntry, ...prev.auditLogs],
     }));
+    void syncAdminMutation('/api/admin/settings', 'PUT', nextSettings);
   };
 
   // Role permission toggle + audit log
@@ -863,6 +963,9 @@ export function AdminDashboardPage({
       ),
       auditLogs: [auditEntry, ...prev.auditLogs],
     }));
+    void syncAdminMutation(`/api/admin/roles/${roleKey}`, 'PUT', {
+      permissions: { [permissionKey]: nextValue },
+    });
     return { ok: true };
   };
 
@@ -901,9 +1004,52 @@ export function AdminDashboardPage({
       ),
       auditLogs: [auditEntry, ...prev.auditLogs],
     }));
+    void syncAdminMutation('/api/admin/profile', 'PUT', updates);
   };
 
-  const handleOwnPasswordChanged = () => {
+  const handleOwnPasswordChanged = async (
+    draft: ChangePasswordDraft
+  ): Promise<{ ok: boolean; error?: string }> => {
+    if (hasBackendApi) {
+      try {
+        const res = await fetch(
+          `${apiBaseUrl.replace(/\/+$/, '')}/api/admin/change-password`,
+          {
+            method: 'PUT',
+            credentials: 'include',
+            headers: {
+              'Content-Type': 'application/json',
+              Accept: 'application/json',
+            },
+            body: JSON.stringify({
+              current_password: draft.current_password,
+              new_password: draft.new_password,
+            }),
+          }
+        );
+        const body = (await res.json().catch(() => null)) as {
+          message?: string;
+          error?: string;
+        } | null;
+        if (!res.ok) {
+          return {
+            ok: false,
+            error: body?.message ?? body?.error ?? 'Current password is incorrect.',
+          };
+        }
+        await refreshAdminWorkspace();
+        return { ok: true };
+      } catch (err) {
+        return {
+          ok: false,
+          error:
+            err instanceof Error
+              ? err.message
+              : 'Unable to reach server to update password.',
+        };
+      }
+    }
+
     const auditEntry = createAuditLogEntry(actor, {
       action: 'Changed administrator password',
       entity_type: 'profile',
@@ -916,6 +1062,7 @@ export function AdminDashboardPage({
       ...prev,
       auditLogs: [auditEntry, ...prev.auditLogs],
     }));
+    return { ok: true };
   };
 
   if (unauthorizedMessage) {
@@ -959,6 +1106,21 @@ export function AdminDashboardPage({
       onQuickSearch={handleQuickSearch}
       onLogout={handleLogout}
     >
+      {syncError && (
+        <div
+          role="alert"
+          className="mb-4 flex items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-xs font-medium text-red-800"
+        >
+          <span>{syncError}</span>
+          <button
+            type="button"
+            onClick={() => setSyncError(null)}
+            className="font-semibold underline cursor-pointer"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
       {isCheckingSession ? (
         <div
           aria-label="Verifying administrator session"

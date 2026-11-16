@@ -15,11 +15,14 @@ import type {
   AnnouncementTargetType,
 } from '../utils/librarianAnnouncements.ts';
 import type { LibrarianProfile } from '../utils/librarianDashboard.ts';
-import type { LibrarianLoginSession, LibrarianNotificationPreferences } from '../utils/librarianProfile.ts';
+import type {
+  LibrarianNotificationPreferenceItem,
+  LibrarianSessionRecord,
+} from '../utils/librarianProfile.ts';
 import type { OverdueFinePaymentStatus, OverdueReminderLogItem } from '../utils/librarianOverdue.ts';
 import type { NotificationCategory, NotificationPreferencesPayload, NotificationPriority, NotificationRelatedEntityType } from '../utils/notificationsPage.ts';
 import type { RecommendationFeedbackValue } from '../utils/recommendationsPage.ts';
-import type { StudentRecommendationPreferences } from '../utils/studentProfilePage.ts';
+import type { RecommendationPreferences } from '../utils/studentProfilePage.ts';
 
 export type UserRole = 'student' | 'librarian' | 'admin';
 
@@ -47,7 +50,7 @@ export interface DbUser {
   preferred_subjects?: string[];
   preferred_authors?: string[];
   restriction_reason?: string | null;
-  recommendation_preferences?: StudentRecommendationPreferences;
+  recommendation_preferences?: RecommendationPreferences;
   notification_preferences?: NotificationPreferencesPayload;
 
   // Staff / Admin fields
@@ -56,7 +59,9 @@ export interface DbUser {
   joining_date?: string;
   invitation_pending?: boolean;
   invitation_sent_at?: string | null;
-  librarian_notification_preferences?: LibrarianNotificationPreferences;
+  librarian_notification_preferences?:
+    | LibrarianNotificationPreferenceItem[]
+    | Record<string, boolean>;
 }
 
 export interface DbSession {
@@ -280,7 +285,7 @@ export type SessionResponsePayload = {
   librarian?: LibrarianProfile;
   admin?: AdminProfile;
   permissions?: AdminPermissions;
-  sessions?: LibrarianLoginSession[];
+  sessions?: LibrarianSessionRecord[];
   staffAccount?: StaffAccountRecord;
   message?: string;
 };

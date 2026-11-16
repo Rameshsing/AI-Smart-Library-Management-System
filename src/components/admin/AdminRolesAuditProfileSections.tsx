@@ -387,7 +387,7 @@ interface AdminProfileSectionProps {
     mobile_number: string;
     designation: string;
   }) => void;
-  onChangePassword: () => void;
+  onChangePassword: (draft: ChangePasswordDraft) => Promise<{ ok: boolean; error?: string }> | void;
 }
 
 export function AdminProfileSection({
@@ -437,7 +437,7 @@ export function AdminProfileSection({
     setProfileSaved('Administrator profile details updated successfully.');
   };
 
-  const handleSavePassword = (e: React.FormEvent) => {
+  const handleSavePassword = async (e: React.FormEvent) => {
     e.preventDefault();
     const res = validateChangePassword(passwordDraft);
     if (!res.isValid) {
@@ -446,12 +446,19 @@ export function AdminProfileSection({
       return;
     }
     setPasswordErrors({});
+    setPasswordSaved(null);
+    const result = await onChangePassword(passwordDraft);
+    if (result && !result.ok) {
+      setPasswordErrors({
+        current_password: result.error ?? 'Failed to update administrator password.',
+      });
+      return;
+    }
     setPasswordDraft({
       current_password: '',
       new_password: '',
       confirm_new_password: '',
     });
-    onChangePassword();
     setPasswordSaved('Administrator password updated and security audit event recorded.');
   };
 

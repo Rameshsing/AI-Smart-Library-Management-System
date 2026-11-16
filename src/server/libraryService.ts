@@ -40,9 +40,17 @@ import type {
 import type { AdminPermissions, AdminProfile } from '../utils/adminDashboard.ts';
 import type {
   AdminAuditLogEntry,
+  PermissionKey,
+  RolePermissionDefinition,
   StaffAccountRecord,
 } from '../utils/adminManagement.ts';
-import type { BookDetailPayload, BookReviewItem } from '../utils/bookDetails.ts';
+import type {
+  BookCopyRecord,
+  BookDetailPayload,
+  BookReviewRecord,
+  DetailedBookRecord,
+  RatingBreakdownItem,
+} from '../utils/bookDetails.ts';
 import type { CatalogBook } from '../utils/bookCatalog.ts';
 import type { LibrarianProfile } from '../utils/librarianDashboard.ts';
 import type {
@@ -55,12 +63,24 @@ import type { CopyCondition, CopyStatus, InventoryBookItem, InventoryPhysicalCop
 import type { OverdueRecordItem } from '../utils/librarianOverdue.ts';
 import type { LibrarianReservationItem } from '../utils/librarianReservations.ts';
 import type { LibrarianStudentDirectoryItem } from '../utils/librarianStudents.ts';
-import type { NotificationItem, NotificationsPayload } from '../utils/notificationsPage.ts';
-import type { ReadingHistoryRecord } from '../utils/readingHistory.ts';
+import type {
+  NotificationItem,
+  NotificationPreferencesPayload,
+  NotificationsPayload,
+} from '../utils/notificationsPage.ts';
+import type {
+  ReadingActivityChartPoint,
+  ReadingHistoryPayload,
+  ReadingHistoryRecord,
+} from '../utils/readingHistory.ts';
 import type { RecommendationFeedbackValue, RecommendationsPayload } from '../utils/recommendationsPage.ts';
-import type { ReservationRecord, ReservationsPayload } from '../utils/reservationsPage.ts';
+import type {
+  ReservationRecord,
+  ReservationsPayload,
+  ReservationStatus,
+} from '../utils/reservationsPage.ts';
 import type { StudentDashboardPayload } from '../utils/studentDashboard.ts';
-import type { StudentProfilePayload } from '../utils/studentProfilePage.ts';
+import type { StudentProfileFullPayload } from '../utils/studentProfilePage.ts';
 
 export class HttpError extends Error {
   statusCode: number;
@@ -306,11 +326,13 @@ export class LibraryService {
       preferred_authors: [],
       restriction_reason: null,
       recommendation_preferences: {
-        prioritize_available_books: true,
-        recommendation_diversity: 'Balanced',
-        include_ebooks: true,
-        include_physical_books: true,
-        avoid_already_read: true,
+        preferred_topics: cleanInterests.slice(0, 4),
+        discovery_preference: 'balanced',
+        reading_level: 'No preference',
+        content_formats: ['Print Books', 'eBooks'],
+        content_languages: ['English'],
+        avoid_previously_read: true,
+        availability_preference: 'available_first',
       },
       notification_preferences: {
         categories: [
@@ -360,7 +382,7 @@ export class LibraryService {
     const adminPermissions: AdminPermissions = {
       can_manage_staff: Boolean(rolePerm?.permissions.manage_staff ?? user.role === 'admin'),
       can_manage_users: Boolean(rolePerm?.permissions.manage_users ?? user.role === 'admin'),
-      can_manage_taxonomy: Boolean(rolePerm?.permissions.manage_taxonomy ?? user.role === 'admin'),
+      can_manage_catalog_taxonomy: Boolean(rolePerm?.permissions.manage_taxonomy ?? user.role === 'admin'),
       can_manage_branches: Boolean(rolePerm?.permissions.manage_branches ?? user.role === 'admin'),
       can_configure_settings: Boolean(rolePerm?.permissions.configure_settings ?? user.role === 'admin'),
       can_manage_roles: Boolean(rolePerm?.permissions.manage_roles ?? user.role === 'admin'),
@@ -427,8 +449,10 @@ export class LibraryService {
         staff_code: user.code,
         full_name: user.full_name,
         email: user.email,
+        mobile_number: user.mobile ?? '',
         designation: user.designation ?? 'Chief System Administrator',
         branch: user.branch ?? 'Main Central Library',
+        joining_date: user.joining_date ?? user.created_at.slice(0, 10),
         role: 'admin',
         account_status: user.account_status === 'Active' ? 'Active' : 'Suspended',
         avatar_url: user.avatar_url,
@@ -440,7 +464,7 @@ export class LibraryService {
     return payload;
   }
 
-  hasPermission(user: DbUser, permissionKey: keyof RolePermissionDefinition['permissions']): boolean {
+  hasPermission(user: DbUser, permissionKey: PermissionKey): boolean {
     if (user.role === 'admin') return true;
     const roleDef = this.state.roles.find((r) => r.role_key === user.role);
     if (!roleDef) return false;
@@ -706,23 +730,68 @@ export class LibraryService {
     }
 
     const catalogBook = this.toCatalogBook(book);
-    const reviews: BookReviewItem[] = this.state.reviews
+    const copies: BookCopyRecord[] = this.state.copies
+      .filter((c) => c.book_id === book.book_id)
+      .map((c) => ({
+        copy_id: c.copy_id,
+        book_id: c.book_id,
+        barcode: c.barcode ?? c.accession_number,
+        status:
+          c.status === 'Issued'
+            ? 'issued'
+            : c.status === 'Reserved'
+              ? 'reserved'
+              : 'available',
+        branch: c.branch,
+        shelf: c.shelf,
+      }));
+
+    const detailedBook: DetailedBookRecord = {
+      ...catalogBook,
+      edition: book.edition,
+      pages: book.pages,
+      location: {
+        branch: book.branch,
+        floor: book.floor,
+        section: book.section,
+        shelf: book.shelf,
+      },
+      copies,
+    };
+
+    const reviews: BookReviewRecord[] = this.state.reviews
       .filter((r) => r.book_id === book.book_id)
       .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
       .map((r) => {
         const reviewer = this.state.users.find((u) => u.user_id === r.student_id);
+        const hasBorrowed = this.state.borrowings.some(
+          (b) => b.student_id === r.student_id && b.book_id === book.book_id
+        );
         return {
-          rating_id: r.rating_id,
-          book_id: r.book_id,
+          review_id: r.rating_id,
           student_id: r.student_id,
-          student_name: reviewer?.full_name ?? 'University Student',
+          book_id: r.book_id,
+          reviewer_display:
+            currentUser?.user_id === r.student_id
+              ? `${reviewer?.full_name ?? 'You'} (You)`
+              : `${reviewer?.full_name ?? 'Student Borrower'} · ${reviewer?.department ?? 'University'}`,
           rating: r.rating,
           review: r.review,
           created_at: r.created_at,
           updated_at: r.updated_at,
-          is_current_student: currentUser?.user_id === r.student_id,
+          relative_date: r.updated_at.slice(0, 10),
+          verified_borrower: hasBorrowed,
         };
       });
+
+    const ratingDistribution: RatingBreakdownItem[] = ([5, 4, 3, 2, 1] as const).map((stars) => {
+      const count = reviews.filter((r) => Math.round(r.rating) === stars).length;
+      return {
+        stars,
+        count,
+        percentage: reviews.length > 0 ? Math.round((count / reviews.length) * 100) : 0,
+      };
+    });
 
     const relatedBooks = this.state.books
       .filter(
@@ -736,16 +805,11 @@ export class LibraryService {
 
     let studentEligibility: BookDetailPayload['student_eligibility'] = {
       is_authenticated: Boolean(currentUser),
-      role: currentUser?.role ?? 'guest',
-      active_borrow_count: 0,
-      max_borrow_limit: this.state.librarySettings.loan_policy.max_active_loans_per_student,
-      has_active_borrowing_for_book: false,
-      active_borrowing_due_date: null,
-      has_active_reservation_for_book: false,
-      active_reservation_id: null,
-      active_reservation_status: null,
-      can_submit_review: false,
-      existing_review: null,
+      can_borrow: false,
+      ineligible_reason: 'Sign in with your student account to borrow or reserve books.',
+      already_borrowed: false,
+      can_review: false,
+      review_ineligible_reason: 'Sign in to submit a rating and review.',
     };
 
     if (currentUser && currentUser.role === 'student') {
@@ -754,49 +818,104 @@ export class LibraryService {
       );
       const activeLoans = studentBorrowings.filter((b) => b.status !== 'Returned');
       const activeForBook = activeLoans.find((b) => b.book_id === book.book_id);
+      const maxLoans = this.state.librarySettings.loan_policy.max_active_loans_per_student;
       const activeReservation = this.state.reservations.find(
         (r) =>
           r.student_id === currentUser.user_id &&
           r.book_id === book.book_id &&
           (r.status === 'Waiting' || r.status === 'Ready for Pickup')
       );
-      const existingReview = reviews.find((r) => r.student_id === currentUser.user_id) ?? null;
+      const waitingQueue = this.state.reservations
+        .filter((r) => r.book_id === book.book_id && r.status === 'Waiting')
+        .sort(
+          (a, b) =>
+            a.reservation_date.localeCompare(b.reservation_date) ||
+            a.reservation_id - b.reservation_id
+        );
+      const existingReview = reviews.find((r) => r.student_id === currentUser.user_id);
+      const hasCompletedOrBorrowed = studentBorrowings.some((b) => b.book_id === book.book_id);
+      const canBorrow =
+        currentUser.account_status === 'Active' &&
+        book.available_copies > 0 &&
+        !activeForBook &&
+        activeLoans.length < maxLoans;
 
       studentEligibility = {
         is_authenticated: true,
-        role: 'student',
-        active_borrow_count: activeLoans.length,
-        max_borrow_limit: this.state.librarySettings.loan_policy.max_active_loans_per_student,
-        has_active_borrowing_for_book: Boolean(activeForBook),
-        active_borrowing_due_date: activeForBook?.due_date ?? null,
-        has_active_reservation_for_book: Boolean(activeReservation),
-        active_reservation_id: activeReservation?.reservation_id ?? null,
-        active_reservation_status:
-          activeReservation?.status === 'Ready for Pickup'
-            ? 'ready_for_pickup'
-            : activeReservation?.status === 'Waiting'
-              ? 'active'
-              : null,
-        can_submit_review: true,
+        can_borrow: canBorrow,
+        ineligible_reason:
+          currentUser.account_status !== 'Active'
+            ? `Your library account is currently ${currentUser.account_status.toLowerCase()}.`
+            : activeForBook
+              ? 'You currently have an active loan for this title.'
+              : activeLoans.length >= maxLoans
+                ? `You have reached the maximum active borrowing limit (${maxLoans} books).`
+                : book.available_copies === 0
+                  ? 'All copies are currently issued or reserved.'
+                  : undefined,
+        already_borrowed: Boolean(activeForBook),
+        active_borrowing: activeForBook
+          ? {
+              transaction_id: activeForBook.borrowing_id,
+              issue_date: activeForBook.issue_date,
+              due_date: activeForBook.due_date,
+            }
+          : undefined,
+        active_reservation: activeReservation
+          ? {
+              reservation_id: activeReservation.reservation_id,
+              student_id: activeReservation.student_id,
+              book_id: activeReservation.book_id,
+              reservation_date: activeReservation.reservation_date,
+              status:
+                activeReservation.status === 'Ready for Pickup' ? 'Ready for Pickup' : 'Active',
+              queue_position:
+                activeReservation.status === 'Waiting'
+                  ? waitingQueue.findIndex(
+                      (x) => x.reservation_id === activeReservation.reservation_id
+                    ) + 1
+                  : null,
+            }
+          : undefined,
+        can_review: Boolean(hasCompletedOrBorrowed || existingReview),
+        review_ineligible_reason:
+          hasCompletedOrBorrowed || existingReview
+            ? undefined
+            : 'Ratings and reviews are enabled after you borrow this book.',
         existing_review: existingReview,
+      };
+    } else if (currentUser) {
+      studentEligibility = {
+        is_authenticated: true,
+        can_borrow: false,
+        ineligible_reason: 'Student account required to borrow online from the catalog.',
+        already_borrowed: false,
+        can_review: false,
+        review_ineligible_reason: 'Only student borrowers can submit book reviews.',
       };
     }
 
-    const queueCount = this.state.reservations.filter(
-      (r) => r.book_id === book.book_id && (r.status === 'Waiting' || r.status === 'Ready for Pickup')
-    ).length;
+    const recommendationReason =
+      currentUser && currentUser.role === 'student'
+        ? (currentUser.interests ?? []).some(
+            (i) =>
+              i.toLowerCase() === book.category.toLowerCase() ||
+              i.toLowerCase() === book.subject.toLowerCase()
+          )
+          ? `Matches your saved academic interests in ${book.category} and ${book.subject}.`
+          : null
+        : null;
 
     return {
       is_prototype_sample: false,
-      book: catalogBook,
-      shelf_code: book.shelf,
-      edition: book.edition,
-      pages: book.pages,
+      book: detailedBook,
+      issued_copies: book.issued_copies,
       loan_period_days: this.state.librarySettings.loan_policy.default_loan_duration_days,
-      reservation_queue_count: queueCount,
+      student_eligibility: studentEligibility,
+      recommendation_reason: recommendationReason,
+      rating_distribution: ratingDistribution,
       reviews,
       related_books: relatedBooks,
-      student_eligibility: studentEligibility,
     };
   }
 
@@ -1976,8 +2095,12 @@ export class LibraryService {
     };
   }
 
-  getStudentReadingHistory(student: DbUser, query: Record<string, string | undefined>) {
+  getStudentReadingHistory(
+    student: DbUser,
+    query: Record<string, string | undefined>
+  ): ReadingHistoryPayload {
     const bookMap = new Map(this.state.books.map((b) => [b.book_id, b]));
+    const copyMap = new Map(this.state.copies.map((c) => [c.copy_id, c]));
     const reviewMap = new Map(
       this.state.reviews
         .filter((r) => r.student_id === student.user_id)
@@ -1986,61 +2109,155 @@ export class LibraryService {
 
     const allCompleted: ReadingHistoryRecord[] = this.state.borrowings
       .filter((b) => b.student_id === student.user_id && b.status === 'Returned')
+      .sort(
+        (a, b) =>
+          (b.return_date ?? b.issue_date).localeCompare(a.return_date ?? a.issue_date) ||
+          b.borrowing_id - a.borrowing_id
+      )
       .map((b) => {
         const book = bookMap.get(b.book_id);
+        const copy = copyMap.get(b.copy_id);
         const rev = reviewMap.get(b.book_id);
+        const returnDate = b.return_date ?? b.issue_date;
         const issueMs = new Date(b.issue_date).getTime();
-        const returnMs = new Date(b.return_date ?? b.issue_date).getTime();
+        const returnMs = new Date(returnDate).getTime();
         const duration = Math.max(1, Math.round((returnMs - issueMs) / 86_400_000));
+        const availableCopies = book?.available_copies ?? 0;
+        const totalCopies = book?.total_copies ?? 0;
+        const alreadyActiveForBook = this.state.borrowings.some(
+          (active) =>
+            active.student_id === student.user_id &&
+            active.book_id === b.book_id &&
+            active.status !== 'Returned'
+        );
         return {
-          history_id: b.borrowing_id,
           borrowing_id: b.borrowing_id,
           book_id: b.book_id,
+          copy_id: b.copy_id,
+          copy_barcode: copy?.barcode ?? copy?.accession_number ?? `COPY-${b.copy_id}`,
           slug: book?.slug ?? String(b.book_id),
           title: book?.title ?? `Book #${b.book_id}`,
           author: book?.authors ?? 'Unknown',
-          cover_image: book?.cover_image ?? '/src/assets/images/book_cover_ai_foundations_1794581525664.jpg',
+          isbn: book?.isbn ?? '',
           category: book?.category ?? 'General',
           subject: book?.subject ?? 'General',
-          format: book?.catalog_format ?? 'Physical Book',
-          borrow_date: b.issue_date,
-          return_date: b.return_date ?? b.issue_date,
-          duration_days: duration,
-          book_average_rating: book?.rating_average ?? 0,
-          book_rating_count: book?.rating_count ?? 0,
+          cover_image:
+            book?.cover_image ?? '/src/assets/images/book_cover_ai_foundations_1794581525664.jpg',
+          issue_date: b.issue_date,
+          due_date: b.due_date,
+          return_date: returnDate,
+          loan_duration_days: duration,
+          status: 'Returned',
+          available_copies: availableCopies,
+          total_copies: totalCopies,
+          availability_label:
+            availableCopies > 0
+              ? `${availableCopies} of ${totalCopies} available`
+              : 'Currently checked out',
+          can_borrow_again: availableCopies > 0 && !alreadyActiveForBook,
+          can_review: true,
           student_rating: rev?.rating ?? null,
-          student_review: rev?.review ?? '',
+          student_review: rev?.review ?? null,
           rating_id: rev?.rating_id ?? null,
-          reviewed_at: rev?.updated_at ?? null,
-          is_currently_available: (book?.available_copies ?? 0) > 0,
-          available_copies: book?.available_copies ?? 0,
+          rating_updated_at: rev?.updated_at ?? null,
+          review_status: rev ? 'Rated' : 'Not Rated',
         };
       });
 
     const search = (query.search ?? '').trim().toLowerCase();
     const category = (query.category ?? '').trim().toLowerCase();
     const subject = (query.subject ?? '').trim().toLowerCase();
-    const ratingStatus = (query.rating_status ?? 'all').trim().toLowerCase();
+    const author = (query.author ?? '').trim().toLowerCase();
+    const statusFilter = (query.status ?? '').trim().toLowerCase();
+    const ratingFilter = (query.rating_filter ?? query.rating_status ?? 'all').trim().toLowerCase();
+    const sort = (query.sort ?? 'recent').trim().toLowerCase();
     const page = Math.max(1, Number.parseInt(query.page ?? '1', 10) || 1);
     const limit = Math.min(50, Math.max(1, Number.parseInt(query.limit ?? '10', 10) || 10));
 
-    const filtered = allCompleted.filter((r) => {
-      if (search && !`${r.title} ${r.author} ${r.category} ${r.subject}`.toLowerCase().includes(search)) {
-        return false;
-      }
-      if (category && r.category.toLowerCase() !== category) return false;
-      if (subject && r.subject.toLowerCase() !== subject) return false;
-      if (ratingStatus === 'rated' && r.student_rating === null) return false;
-      if (ratingStatus === 'unrated' && r.student_rating !== null) return false;
-      return true;
-    });
+    const filtered = allCompleted
+      .filter((r) => {
+        if (
+          search &&
+          !`${r.title} ${r.author} ${r.category} ${r.subject}`.toLowerCase().includes(search)
+        ) {
+          return false;
+        }
+        if (category && r.category.toLowerCase() !== category) return false;
+        if (subject && r.subject.toLowerCase() !== subject) return false;
+        if (author && r.author.toLowerCase() !== author) return false;
+        if (statusFilter && r.status.toLowerCase() !== statusFilter) return false;
+        if (ratingFilter === 'rated' && r.student_rating === null) return false;
+        if ((ratingFilter === 'not_rated' || ratingFilter === 'unrated') && r.student_rating !== null) {
+          return false;
+        }
+        return true;
+      })
+      .sort((a, b) => {
+        if (sort === 'oldest') {
+          return a.return_date.localeCompare(b.return_date) || a.borrowing_id - b.borrowing_id;
+        }
+        if (sort === 'title_asc') return a.title.localeCompare(b.title);
+        if (sort === 'title_desc') return b.title.localeCompare(a.title);
+        if (sort === 'highest_rated') {
+          return (b.student_rating ?? -1) - (a.student_rating ?? -1);
+        }
+        if (sort === 'longest_duration') {
+          return b.loan_duration_days - a.loan_duration_days;
+        }
+        return b.return_date.localeCompare(a.return_date) || b.borrowing_id - a.borrowing_id;
+      });
 
+    const rankFacets = (vals: string[]) => {
+      const counts = new Map<string, number>();
+      for (const v of vals) {
+        if (v) counts.set(v, (counts.get(v) ?? 0) + 1);
+      }
+      return Array.from(counts.entries())
+        .map(([name, count]) => ({ name, count }))
+        .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
+        .slice(0, 3);
+    };
+
+    const currentMonthPrefix = new Date().toISOString().slice(0, 7);
     const totalCompleted = allCompleted.length;
     const ratedCount = allCompleted.filter((r) => r.student_rating !== null).length;
     const avgDuration =
       totalCompleted > 0
-        ? Math.round(allCompleted.reduce((acc, r) => acc + r.duration_days, 0) / totalCompleted)
+        ? Math.round(
+            (allCompleted.reduce((acc, r) => acc + r.loan_duration_days, 0) / totalCompleted) * 10
+          ) / 10
         : null;
+
+    const monthShort = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const now = new Date();
+    const monthlyActivity: ReadingActivityChartPoint[] =
+      totalCompleted === 0
+        ? []
+        : Array.from({ length: 6 }, (_, idx) => {
+            const offset = 5 - idx;
+            const d = new Date(now.getFullYear(), now.getMonth() - offset, 1);
+            const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+            return {
+              key,
+              month: monthShort[d.getMonth()],
+              count: allCompleted.filter((r) => r.return_date.startsWith(key)).length,
+            };
+          });
+
+    const monthCountMap = new Map<string, number>();
+    for (const r of allCompleted) {
+      const ym = r.return_date.slice(0, 7);
+      monthCountMap.set(ym, (monthCountMap.get(ym) ?? 0) + 1);
+    }
+    let mostActivePeriod: { label: string; count: number } | null = null;
+    for (const [ym, count] of monthCountMap.entries()) {
+      const [y, m] = ym.split('-');
+      const mIdx = Number.parseInt(m ?? '1', 10) - 1;
+      const label = monthShort[mIdx] ? `${monthShort[mIdx]} ${y}` : ym;
+      if (!mostActivePeriod || count > mostActivePeriod.count) {
+        mostActivePeriod = { label, count };
+      }
+    }
 
     const totalPages = Math.max(1, Math.ceil(filtered.length / limit));
     const safePage = Math.min(page, totalPages);
@@ -2054,16 +2271,30 @@ export class LibraryService {
       limit,
       total_pages: totalPages,
       summary: {
-        books_completed: totalCompleted,
-        books_rated: ratedCount,
-        favorite_subject: allCompleted[0]?.subject ?? null,
-        average_reading_duration_days: avgDuration,
-        reading_streak_months: totalCompleted > 0 ? 2 : 0,
-        completed_this_year: totalCompleted,
+        total_books: totalCompleted,
+        this_month: allCompleted.filter(
+          (r) =>
+            r.return_date.startsWith(currentMonthPrefix) ||
+            r.issue_date.startsWith(currentMonthPrefix)
+        ).length,
+        favourite_category: rankFacets(allCompleted.map((r) => r.category))[0]?.name ?? null,
+        ratings_given: ratedCount,
       },
+      insights: {
+        has_sufficient_data: totalCompleted >= 2,
+        favourite_subjects: totalCompleted >= 2 ? rankFacets(allCompleted.map((r) => r.subject)) : [],
+        favourite_categories: totalCompleted >= 2 ? rankFacets(allCompleted.map((r) => r.category)) : [],
+        favourite_authors: totalCompleted >= 2 ? rankFacets(allCompleted.map((r) => r.author)) : [],
+        average_loan_duration_days: totalCompleted >= 2 ? avgDuration : null,
+        most_active_period: totalCompleted >= 2 ? mostActivePeriod : null,
+        total_completed: totalCompleted,
+      },
+      monthly_activity: monthlyActivity,
       facets: {
-        categories: Array.from(new Set(allCompleted.map((r) => r.category))),
-        subjects: Array.from(new Set(allCompleted.map((r) => r.subject))),
+        categories: Array.from(new Set(allCompleted.map((r) => r.category))).sort(),
+        subjects: Array.from(new Set(allCompleted.map((r) => r.subject))).sort(),
+        authors: Array.from(new Set(allCompleted.map((r) => r.author))).sort(),
+        statuses: ['Returned'],
       },
     };
   }
@@ -2074,9 +2305,15 @@ export class LibraryService {
   ): ReservationsPayload {
     const bookMap = new Map(this.state.books.map((b) => [b.book_id, b]));
     const pickupWindowHours = this.state.librarySettings.reservation_policy.pickup_window_hours;
+    const holdDays = Math.max(1, Math.round(pickupWindowHours / 24));
 
     const mapped: ReservationRecord[] = this.state.reservations
       .filter((r) => r.student_id === student.user_id)
+      .sort(
+        (a, b) =>
+          b.reservation_date.localeCompare(a.reservation_date) ||
+          b.reservation_id - a.reservation_id
+      )
       .map((r) => {
         const book = bookMap.get(r.book_id);
         const waitingQueue = this.state.reservations
@@ -2090,16 +2327,7 @@ export class LibraryService {
           r.status === 'Waiting'
             ? waitingQueue.findIndex((x) => x.reservation_id === r.reservation_id) + 1
             : null;
-        const status: ReservationRecord['status'] =
-          r.status === 'Ready for Pickup'
-            ? 'ready_for_pickup'
-            : r.status === 'Waiting'
-              ? 'waiting'
-              : r.status === 'Completed'
-                ? 'fulfilled'
-                : r.status === 'Expired'
-                  ? 'expired'
-                  : 'cancelled';
+        const status: ReservationStatus = r.status;
 
         return {
           reservation_id: r.reservation_id,
@@ -2108,62 +2336,94 @@ export class LibraryService {
           slug: book?.slug ?? String(r.book_id),
           title: book?.title ?? `Book #${r.book_id}`,
           author: book?.authors ?? 'Unknown',
-          cover_image: book?.cover_image ?? '/src/assets/images/book_cover_ai_foundations_1794581525664.jpg',
           category: book?.category ?? 'General',
           subject: book?.subject ?? 'General',
-          format: book?.catalog_format ?? 'Physical Book',
+          cover_image:
+            book?.cover_image ?? '/src/assets/images/book_cover_ai_foundations_1794581525664.jpg',
+          reservation_date: r.reservation_date,
           status,
-          reserved_date: r.reservation_date,
+          queue_position: queuePosition,
+          people_ahead: queuePosition !== null ? Math.max(0, queuePosition - 1) : null,
+          estimated_availability:
+            status === 'Ready for Pickup'
+              ? 'Available now for desk collection'
+              : status === 'Waiting'
+                ? 'Queued in FIFO order'
+                : null,
           ready_date: r.ready_date,
           pickup_deadline: r.pickup_deadline,
+          hold_days: status === 'Ready for Pickup' ? holdDays : null,
           fulfilled_date: r.status === 'Completed' ? r.updated_at.slice(0, 10) : null,
           cancelled_date: r.status === 'Cancelled' ? r.updated_at.slice(0, 10) : null,
-          queue_position: queuePosition,
-          queue_total: waitingQueue.length || null,
+          expired_date: r.status === 'Expired' ? r.updated_at.slice(0, 10) : null,
           available_copies: book?.available_copies ?? 0,
           total_copies: book?.total_copies ?? 0,
-          pickup_location: book?.branch ?? 'Main Central Library',
-          book_rating: book?.rating_average ?? 0,
+          location_summary: book ? `${book.branch} · ${book.shelf}` : 'Main Central Library',
+          instructions:
+            status === 'Ready for Pickup'
+              ? `Present your student ID at ${book?.branch ?? 'Main Central Library'} before ${r.pickup_deadline ?? 'the hold deadline'}.`
+              : status === 'Waiting'
+                ? 'You will be notified automatically as soon as a copy is returned and assigned to you.'
+                : null,
+          can_cancel: status === 'Waiting' || status === 'Ready for Pickup',
+          can_collect_online: false,
         };
       });
 
     const tab = (query.tab ?? 'all').toLowerCase();
     const search = (query.search ?? '').trim().toLowerCase();
+    const page = Math.max(1, Number.parseInt(query.page ?? '1', 10) || 1);
+    const limit = Math.min(50, Math.max(1, Number.parseInt(query.limit ?? '6', 10) || 6));
+
     const filtered = mapped.filter((item) => {
-      if (search && !`${item.title} ${item.author} ${item.reference_code}`.toLowerCase().includes(search)) {
+      if (
+        search &&
+        !`${item.title} ${item.author} ${item.reference_code}`.toLowerCase().includes(search)
+      ) {
         return false;
       }
-      if (tab === 'active') return item.status === 'waiting' || item.status === 'ready_for_pickup';
-      if (tab === 'ready') return item.status === 'ready_for_pickup';
-      if (tab === 'waiting') return item.status === 'waiting';
-      if (tab === 'fulfilled') return item.status === 'fulfilled';
-      if (tab === 'cancelled') return item.status === 'cancelled' || item.status === 'expired';
+      if (tab === 'active') return item.status === 'Waiting' || item.status === 'Ready for Pickup';
+      if (tab === 'ready_for_pickup' || tab === 'ready') return item.status === 'Ready for Pickup';
+      if (tab === 'waiting') return item.status === 'Waiting';
+      if (tab === 'completed' || tab === 'fulfilled') {
+        return item.status === 'Completed' || item.status === 'Borrowed';
+      }
+      if (tab === 'cancelled_expired' || tab === 'cancelled') {
+        return item.status === 'Cancelled' || item.status === 'Expired';
+      }
       return true;
     });
 
+    const totalPages = Math.max(1, Math.ceil(filtered.length / limit));
+    const safePage = Math.min(page, totalPages);
+
     return {
       is_prototype_sample: false,
-      items: filtered,
+      items: filtered.slice((safePage - 1) * limit, safePage * limit),
       total_count: mapped.length,
       filtered_count: filtered.length,
-      page: 1,
-      limit: 20,
-      total_pages: 1,
+      page: safePage,
+      limit,
+      total_pages: totalPages,
       summary: {
         active_reservations: mapped.filter(
-          (i) => i.status === 'waiting' || i.status === 'ready_for_pickup'
+          (i) => i.status === 'Waiting' || i.status === 'Ready for Pickup'
         ).length,
-        ready_for_pickup: mapped.filter((i) => i.status === 'ready_for_pickup').length,
-        waiting: mapped.filter((i) => i.status === 'waiting').length,
-        expiring_soon: mapped.filter((i) => i.status === 'ready_for_pickup').length,
+        ready_for_pickup: mapped.filter((i) => i.status === 'Ready for Pickup').length,
+        waiting: mapped.filter((i) => i.status === 'Waiting').length,
+        expiring_soon: mapped.filter((i) => i.status === 'Ready for Pickup').length,
       },
       policy: {
-        pickup_window_hours: pickupWindowHours,
-        max_active_reservations:
+        reservation_limit:
           this.state.librarySettings.reservation_policy.max_active_reservations_per_student,
-        supports_online_collect: true,
+        active_count: mapped.filter(
+          (i) => i.status === 'Waiting' || i.status === 'Ready for Pickup'
+        ).length,
+        pickup_hold_days: holdDays,
+        priority_policy_label: 'First-In, First-Out (FIFO) Queue',
+        workflow_mode: 'librarian_issue',
       },
-      supported_statuses: ['waiting', 'ready_for_pickup', 'fulfilled', 'cancelled', 'expired'],
+      supported_statuses: ['Waiting', 'Ready for Pickup', 'Completed', 'Cancelled', 'Expired'],
     };
   }
 
@@ -2650,6 +2910,13 @@ export class LibraryService {
     format: 'Hardcover' | 'Paperback' | 'Reference' | 'E-Book';
     cover_image?: string;
     initial_copies: number;
+    physical_copies?: Array<{
+      accession_number: string;
+      barcode?: string | null;
+      condition?: CopyCondition;
+      status?: CopyStatus;
+      location_code?: string;
+    }>;
     branch: string;
     floor?: string;
     section?: string;
@@ -2723,28 +2990,207 @@ export class LibraryService {
 
     this.state.books.unshift(newBook);
 
-    for (let i = 1; i <= numCopies; i++) {
-      const copyId = this.state.nextIds.copy++;
-      const accession = `ACC-${String(bookId).padStart(4, '0')}-${String(i).padStart(2, '0')}`;
-      this.state.copies.push({
-        copy_id: copyId,
-        book_id: bookId,
-        accession_number: accession,
-        barcode: `BC-${bookId}-${String(i).padStart(2, '0')}`,
-        status: 'Available',
-        condition: 'New',
-        branch: newBook.branch,
-        floor: newBook.floor,
-        section: newBook.section,
-        shelf: newBook.shelf,
-        added_at: nowIso.slice(0, 10),
-        updated_at: nowIso,
-      });
+    const providedCopies = Array.isArray(input.physical_copies) && input.physical_copies.length > 0
+      ? input.physical_copies
+      : null;
+
+    if (providedCopies) {
+      for (const draftCopy of providedCopies) {
+        const acc = String(draftCopy.accession_number ?? '').trim();
+        if (!acc) {
+          throw new HttpError(400, 'Every physical copy must include an accession number.', 'INVALID_ACCESSION');
+        }
+        if (this.state.copies.some((c) => c.accession_number.toLowerCase() === acc.toLowerCase())) {
+          throw new HttpError(409, `Accession number ${acc} already exists in inventory.`, 'DUPLICATE_ACCESSION');
+        }
+      }
+      for (let i = 0; i < providedCopies.length; i++) {
+        const draftCopy = providedCopies[i];
+        const copyId = this.state.nextIds.copy++;
+        const accession = String(draftCopy.accession_number).trim();
+        const safeStatus: CopyStatus =
+          draftCopy.status === 'Under Repair' || draftCopy.status === 'Damaged'
+            ? draftCopy.status
+            : 'Available';
+        const safeCondition: CopyCondition =
+          draftCopy.condition === 'Good' ||
+          draftCopy.condition === 'Fair' ||
+          draftCopy.condition === 'Worn' ||
+          draftCopy.condition === 'Needs Repair' ||
+          draftCopy.condition === 'New'
+            ? draftCopy.condition
+            : draftCopy.condition === 'Damaged'
+              ? 'Needs Repair'
+              : 'New';
+        this.state.copies.push({
+          copy_id: copyId,
+          book_id: bookId,
+          accession_number: accession,
+          barcode: draftCopy.barcode ? String(draftCopy.barcode).trim() : `BC-${bookId}-${String(i + 1).padStart(2, '0')}`,
+          status: safeStatus,
+          condition: safeCondition,
+          branch: newBook.branch,
+          floor: newBook.floor,
+          section: newBook.section,
+          shelf: draftCopy.location_code?.trim() || newBook.shelf,
+          added_at: nowIso.slice(0, 10),
+          updated_at: nowIso,
+        });
+      }
+    } else {
+      for (let i = 1; i <= numCopies; i++) {
+        const copyId = this.state.nextIds.copy++;
+        const accession = `ACC-${String(bookId).padStart(4, '0')}-${String(i).padStart(2, '0')}`;
+        this.state.copies.push({
+          copy_id: copyId,
+          book_id: bookId,
+          accession_number: accession,
+          barcode: `BC-${bookId}-${String(i).padStart(2, '0')}`,
+          status: 'Available',
+          condition: 'New',
+          branch: newBook.branch,
+          floor: newBook.floor,
+          section: newBook.section,
+          shelf: newBook.shelf,
+          added_at: nowIso.slice(0, 10),
+          updated_at: nowIso,
+        });
+      }
     }
 
     reconcileBookCounts(this.state, bookId);
     this.persist();
     return this.toInventoryBookItem(newBook);
+  }
+
+  buildLibrarianFullProfilePayload(user: DbUser, currentSessionId?: string) {
+    const base = this.buildSessionPayload(user).librarian!;
+    const defaultPrefs = [
+      {
+        category: 'overdue_alerts' as const,
+        label: 'Overdue Alerts',
+        description: 'Daily summary and escalation notices for overdue student loans.',
+        in_app_enabled: true,
+        email_enabled: true,
+        is_mandatory: false,
+        mandatory_reason: null,
+        email_supported: true,
+      },
+      {
+        category: 'reservation_alerts' as const,
+        label: 'Reservation Alerts',
+        description: 'New queue holds, returned copies matching reservations, and expiring pickups.',
+        in_app_enabled: true,
+        email_enabled: true,
+        is_mandatory: false,
+        mandatory_reason: null,
+        email_supported: true,
+      },
+      {
+        category: 'issue_notifications' as const,
+        label: 'Issue Notifications',
+        description: 'Desk circulation receipts and limit override confirmations.',
+        in_app_enabled: true,
+        email_enabled: false,
+        is_mandatory: false,
+        mandatory_reason: null,
+        email_supported: true,
+      },
+      {
+        category: 'return_notifications' as const,
+        label: 'Return Notifications',
+        description: 'Damaged/lost copy return flags and stock replenishment notices.',
+        in_app_enabled: true,
+        email_enabled: false,
+        is_mandatory: false,
+        mandatory_reason: null,
+        email_supported: true,
+      },
+      {
+        category: 'library_announcements' as const,
+        label: 'Library Announcements',
+        description: 'Administrative broadcasts, scheduled audits, and holiday desk hours.',
+        in_app_enabled: true,
+        email_enabled: true,
+        is_mandatory: false,
+        mandatory_reason: null,
+        email_supported: true,
+      },
+      {
+        category: 'account_security_alerts' as const,
+        label: 'Account Security Alerts',
+        description: 'Password updates, session revocations, and staff sign-in verification.',
+        in_app_enabled: true,
+        email_enabled: true,
+        is_mandatory: true,
+        mandatory_reason: 'Mandatory for staff account protection and cannot be turned off.',
+        email_supported: true,
+      },
+    ];
+
+    const storedPrefs = Array.isArray(user.librarian_notification_preferences)
+      ? defaultPrefs.map((def) => {
+          const match = (
+            user.librarian_notification_preferences as Array<{
+              category: string;
+              in_app_enabled: boolean;
+              email_enabled: boolean;
+            }>
+          ).find((p) => p.category === def.category);
+          return match
+            ? {
+                ...def,
+                in_app_enabled: def.is_mandatory ? true : Boolean(match.in_app_enabled),
+                email_enabled: Boolean(match.email_enabled),
+              }
+            : def;
+        })
+      : defaultPrefs;
+
+    const recentActivity = this.state.auditLogs
+      .filter((l) => l.actor_id === user.user_id || l.actor_name === user.full_name)
+      .slice(0, 12)
+      .map((l) => ({
+        activity_id: l.log_id,
+        action: l.action,
+        target_summary: `${l.entity_label} (${l.entity_id})`,
+        timestamp: l.timestamp,
+        status: (l.result === 'Success' ? 'Completed' : 'Verified') as 'Completed' | 'Verified',
+      }));
+
+    const activeSessions = this.state.sessions
+      .filter((s) => s.user_id === user.user_id)
+      .map((s) => ({
+        session_id: s.session_id,
+        device_label: s.device_label,
+        browser: s.device_label,
+        location_summary: s.ip_address,
+        last_active_at: s.last_active_at,
+        is_current: s.session_id === currentSessionId,
+        can_revoke: s.session_id !== currentSessionId,
+      }));
+
+    return {
+      is_prototype_sample: false,
+      librarian: {
+        ...base,
+        mobile_number: user.mobile ?? '',
+        designation: user.designation ?? base.department_title,
+        branch: user.branch ?? 'Main Central Library',
+        joining_date: user.joining_date ?? user.created_at,
+      },
+      capabilities: {
+        allow_photo_upload: true,
+        supports_email_notifications:
+          this.state.librarySettings.reminder_policy.email_notifications_enabled,
+        supports_session_management: true,
+        supports_audit_logs: true,
+        supports_2fa: false as const,
+      },
+      notification_preferences: storedPrefs,
+      recent_activity: recentActivity,
+      active_sessions: activeSessions,
+    };
   }
 
   toStaffAccountRecord(u: DbUser): StaffAccountRecord {

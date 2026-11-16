@@ -71,6 +71,8 @@ export function ReservationsManagementPage({
 
   const sampleStoreRef = useRef(createSampleReservationsStore());
   const [policy, setPolicy] = useState<ReservationPolicyConfig>(sampleStoreRef.current.policy);
+  const policyRef = useRef(policy);
+  policyRef.current = policy;
   const [supportedFilters, setSupportedFilters] = useState<ReservationSupportedFilters>(
     sampleStoreRef.current.supportedFilters
   );
@@ -181,11 +183,12 @@ export function ReservationsManagementPage({
 
     if (!hasBackendApi) {
       await new Promise((r) => window.setTimeout(r, 90));
-      const refDate = new Date(policy.server_reference_iso);
+      const currentPolicy = policyRef.current;
+      const refDate = new Date(currentPolicy.server_reference_iso);
       const result = filterAndPaginateReservations(
         allSampleItems,
         filterCriteria,
-        policy,
+        currentPolicy,
         refDate,
         page,
         PAGE_SIZE
@@ -193,7 +196,7 @@ export function ReservationsManagementPage({
       setRows(result.items);
       setTotalCount(result.totalCount);
       setTotalPages(result.totalPages);
-      setSummaryCounts(computeReservationSummary(allSampleItems, policy, refDate));
+      setSummaryCounts(computeReservationSummary(allSampleItems, currentPolicy, refDate));
       setIsLoading(false);
       return;
     }
@@ -237,7 +240,9 @@ export function ReservationsManagementPage({
       };
 
       const fetchedItems = payload.items ?? [];
-      const mergedPolicy = payload.policy ? { ...policy, ...payload.policy } : policy;
+      const mergedPolicy = payload.policy
+        ? { ...policyRef.current, ...payload.policy }
+        : policyRef.current;
       if (payload.policy) setPolicy(mergedPolicy);
       if (payload.supported_filters) {
         setSupportedFilters((prev) => ({ ...prev, ...payload.supported_filters }));
@@ -277,7 +282,7 @@ export function ReservationsManagementPage({
     } finally {
       setIsLoading(false);
     }
-  }, [allSampleItems, apiBaseUrl, filterCriteria, hasBackendApi, onNavigate, page, policy]);
+  }, [allSampleItems, apiBaseUrl, filterCriteria, hasBackendApi, onNavigate, page]);
 
   useEffect(() => {
     void loadReservations();

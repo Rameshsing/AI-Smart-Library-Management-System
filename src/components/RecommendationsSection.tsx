@@ -76,7 +76,7 @@ export function RecommendationsSection({ onNavigate }: RecommendationsSectionPro
                 </div>
                 <div className="mt-4 flex items-center gap-1.5 pt-3 border-t border-slate-100 text-xs text-slate-500">
                   <Info className="h-3.5 w-3.5 text-[#2563EB]" aria-hidden="true" />
-                  <span>Powered by Python &amp; Pandas filtering</span>
+                  <span>Powered by hybrid content &amp; collaborative filtering</span>
                 </div>
               </div>
             ))}
