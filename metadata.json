@@ -1,0 +1,6 @@
+{
+  "name": "AI Smart Library",
+  "description": "Discover. Learn. Grow. A smart library management platform that helps students discover books, explore learning resources, and receive personalized book recommendations using AI.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
