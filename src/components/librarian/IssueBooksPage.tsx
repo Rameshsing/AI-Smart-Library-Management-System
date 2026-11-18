@@ -20,6 +20,7 @@ import {
   type LibrarianPermissions,
 } from '../../utils/librarianDashboard';
 import { getApiBaseUrl, isBackendConnected } from '../../utils/apiConfig';
+import { apiFetch } from '../../utils/clientSession';
 import type {
   InventoryBookItem,
   InventoryPhysicalCopy,
@@ -126,7 +127,7 @@ export function IssueBooksPage({
     let active = true;
     (async () => {
       try {
-        const res = await fetch(
+        const res = await apiFetch(
           `${apiBaseUrl.replace(/\/+$/, '')}/api/librarian/circulation/policy`,
           { method: 'GET', credentials: 'include', headers: { Accept: 'application/json' } }
         );
@@ -167,7 +168,7 @@ export function IssueBooksPage({
 
       setIsSearchingStudents(true);
       try {
-        const res = await fetch(
+        const res = await apiFetch(
           `${apiBaseUrl.replace(/\/+$/, '')}/api/librarian/students/search?q=${encodeURIComponent(clean)}`,
           { method: 'GET', credentials: 'include', headers: { Accept: 'application/json' } }
         );
@@ -210,7 +211,7 @@ export function IssueBooksPage({
 
     setIsCheckingEligibility(true);
     try {
-      const res = await fetch(
+      const res = await apiFetch(
         `${apiBaseUrl.replace(/\/+$/, '')}/api/librarian/students/${student.student_id}/eligibility`,
         { method: 'GET', credentials: 'include', headers: { Accept: 'application/json' } }
       );
@@ -257,7 +258,7 @@ export function IssueBooksPage({
 
       setIsSearchingBooks(true);
       try {
-        const res = await fetch(
+        const res = await apiFetch(
           `${apiBaseUrl.replace(/\/+$/, '')}/api/librarian/books/search?q=${encodeURIComponent(clean)}`,
           { method: 'GET', credentials: 'include', headers: { Accept: 'application/json' } }
         );
@@ -304,7 +305,7 @@ export function IssueBooksPage({
 
       setIsLoadingCopies(true);
       try {
-        const res = await fetch(
+        const res = await apiFetch(
           `${apiBaseUrl.replace(/\/+$/, '')}/api/librarian/books/${book.book_id}/copies`,
           { method: 'GET', credentials: 'include', headers: { Accept: 'application/json' } }
         );
@@ -360,7 +361,7 @@ export function IssueBooksPage({
         } else {
           setIsCheckingEligibility(true);
           try {
-            const res = await fetch(
+            const res = await apiFetch(
               `${apiBaseUrl.replace(/\/+$/, '')}/api/librarian/students/${prefillStudentId}/eligibility`,
               { method: 'GET', credentials: 'include', headers: { Accept: 'application/json' } }
             );
@@ -389,7 +390,7 @@ export function IssueBooksPage({
             sampleStoreRef.current.books.find((b) => b.book_id === prefillBookId) ?? null;
         } else {
           try {
-            const res = await fetch(
+            const res = await apiFetch(
               `${apiBaseUrl.replace(/\/+$/, '')}/api/librarian/books/search?q=${encodeURIComponent(String(prefillBookId))}`,
               { method: 'GET', credentials: 'include', headers: { Accept: 'application/json' } }
             );
@@ -464,7 +465,7 @@ export function IssueBooksPage({
 
     if (hasBackendApi) {
       try {
-        const res = await fetch(
+        const res = await apiFetch(
           `${apiBaseUrl.replace(/\/+$/, '')}/api/librarian/copies/lookup?code=${encodeURIComponent(trimmed)}`,
           { method: 'GET', credentials: 'include', headers: { Accept: 'application/json' } }
         );
@@ -573,7 +574,7 @@ export function IssueBooksPage({
     setIsSubmitting(true);
 
     try {
-      const response = await fetch(
+      const response = await apiFetch(
         `${apiBaseUrl.replace(/\/+$/, '')}/api/librarian/borrowings`,
         {
           method: 'POST',

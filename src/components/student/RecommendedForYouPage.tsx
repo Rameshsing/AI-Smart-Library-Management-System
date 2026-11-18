@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import type { AppRoute } from '../../data/libraryData';
 import { getApiBaseUrl, isBackendConnected } from '../../utils/apiConfig';
+import { apiFetch } from '../../utils/clientSession';
 import type { BookRatingReview, StudentProfile } from '../../utils/studentDashboard';
 import {
   buildRecommendationsApiParams,
@@ -93,7 +94,7 @@ export function RecommendedForYouPage({
       if (backendConnected) {
         try {
           const params = buildRecommendationsApiParams(DEFAULT_RECOMMENDATION_FILTERS, 24);
-          const response = await fetch(`${apiBaseUrl}/api/recommendations?${params.toString()}`, {
+          const response = await apiFetch(`${apiBaseUrl}/api/recommendations?${params.toString()}`, {
             method: 'GET',
             credentials: 'include',
             headers: { Accept: 'application/json' },
@@ -168,7 +169,7 @@ export function RecommendedForYouPage({
     const apiBaseUrl = getApiBaseUrl();
     if (isBackendConnected() && nextValue !== null) {
       try {
-        const response = await fetch(`${apiBaseUrl}/api/recommendations/feedback`, {
+        const response = await apiFetch(`${apiBaseUrl}/api/recommendations/feedback`, {
           method: 'POST',
           credentials: 'include',
           headers: { 'Content-Type': 'application/json', Accept: 'application/json' },

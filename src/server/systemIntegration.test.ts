@@ -58,9 +58,11 @@ function createApiClient(baseUrl: string): ApiClient {
 }
 
 async function startTestServer() {
+  const authDebugLogs: string[] = [];
   const service = new LibraryService({
     dbFilePath: null,
     initialState: createSeedDatabaseState(),
+    authDebugLogger: (line) => authDebugLogs.push(line),
   });
   const app = createLibraryApp(service);
   // Mount the same static image handler as server.ts before SPA fallback
@@ -77,6 +79,7 @@ async function startTestServer() {
 
   return {
     service,
+    authDebugLogs,
     baseUrl,
     close: () =>
       new Promise<void>((resolve, reject) =>
@@ -86,8 +89,20 @@ async function startTestServer() {
 }
 
 test('Security, RBAC, XSS sanitization, and static image asset serving', async () => {
-  const { baseUrl, close } = await startTestServer();
+  const { baseUrl, authDebugLogs, close } = await startTestServer();
   try {
+    // 0. Health & DB configuration diagnostics verification
+    const healthRes = await fetch(`${baseUrl}/api/health`);
+    assert.equal(healthRes.status, 200);
+    const healthJson = (await healthRes.json()) as {
+      ok: boolean;
+      database: { connected: boolean; models_verified: boolean; model_counts: { users: number } };
+    };
+    assert.equal(healthJson.ok, true);
+    assert.equal(healthJson.database.connected, true);
+    assert.equal(healthJson.database.models_verified, true);
+    assert.ok(healthJson.database.model_counts.users >= 7);
+
     // 1. Static image asset verification
     for (const img of [
       '/src/assets/images/hero_smart_library_1794581525172.jpg',
@@ -99,7 +114,92 @@ test('Security, RBAC, XSS sanitization, and static image asset serving', async (
       assert.match(imgRes.headers.get('content-type') ?? '', /image\/jpeg/);
     }
 
-    // 2. Unauthenticated access blocked
+    // 2. Student registration using nested payload from StudentRegistrationPage works cleanly
+    const regClient = createApiClient(baseUrl);
+    const regRes = await regClient.request<{ registered: boolean; student_code: string; email: string }>(
+      'POST',
+      '/api/auth/register',
+      {
+        user: { email: 'maya.lin@university.edu', role: 'student', password_hash_required: true },
+        student: {
+          full_name: 'Maya Lin',
+          student_code: 'STU-2026-991',
+          mobile_number: '+91 98111 22334',
+          institution_name: 'National Institute of Technology',
+          course_department: 'Data Science',
+          academic_year: '2nd Year',
+        },
+        student_interests: ['Machine Learning', 'Artificial Intelligence'],
+        student_subjects: ['Algorithms'],
+        password: 'Password@123',
+      }
+    );
+    assert.equal(regRes.status, 201);
+    assert.equal(regRes.data.registered, true);
+    assert.equal(regRes.data.student_code, 'STU-2026-991');
+
+    const regLogin = await regClient.request<{
+      authenticated: boolean;
+      session_token?: string;
+      student: { name: string };
+    }>('POST', '/api/auth/login', {
+      identifier: 'maya.lin@university.edu',
+      password: 'Password@123',
+      requested_role: 'student',
+    });
+    assert.equal(regLogin.status, 200);
+    assert.equal(regLogin.data.authenticated, true);
+    assert.equal(regLogin.data.student.name, 'Maya Lin');
+    assert.ok(regLogin.data.session_token, 'Expected signed session_token for iframe auth fallback');
+
+    assert.ok(
+      authDebugLogs.some(
+        (line) =>
+          line.includes('[AUTH DEBUG]') &&
+          line.includes('op=register_query') &&
+          line.includes('db_connected=true') &&
+          line.includes('outcome=student_created')
+      )
+    );
+    assert.ok(
+      authDebugLogs.some(
+        (line) =>
+          line.includes('[AUTH DEBUG]') &&
+          line.includes('op=login_query') &&
+          line.includes('db_connected=true') &&
+          line.includes('record_found=true') &&
+          line.includes('outcome=authenticated') &&
+          !line.includes('Password@123')
+      )
+    );
+
+    // 2b. Verify newly registered student works with Bearer token alone (no Cookie header, simulating blocked 3P iframe cookies)
+    const bearerHeaders = {
+      Accept: 'application/json',
+      Authorization: `Bearer ${regLogin.data.session_token}`,
+    };
+    for (const endpoint of [
+      '/api/student/dashboard',
+      '/api/recommendations',
+      '/api/student/profile',
+      '/api/student/notifications',
+      '/api/student/borrowings',
+      '/api/student/reservations',
+      '/api/student/reading-history',
+    ]) {
+      const bearerRes = await fetch(`${baseUrl}${endpoint}`, { headers: bearerHeaders });
+      assert.equal(bearerRes.status, 200, `Expected 200 for Bearer auth on ${endpoint}`);
+    }
+
+    const bearerLogout = await fetch(`${baseUrl}/api/auth/logout`, {
+      method: 'POST',
+      headers: bearerHeaders,
+    });
+    assert.equal(bearerLogout.status, 200);
+    const afterLogout = await fetch(`${baseUrl}/api/student/dashboard`, { headers: bearerHeaders });
+    assert.equal(afterLogout.status, 401, 'Session must be revoked after Bearer logout');
+
+    // 3. Unauthenticated access blocked
     const anon = createApiClient(baseUrl);
     assert.equal((await anon.request('GET', '/api/student/dashboard')).status, 401);
     assert.equal((await anon.request('GET', '/api/librarian/books')).status, 401);

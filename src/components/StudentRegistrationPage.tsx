@@ -23,7 +23,9 @@ import {
   User,
 } from 'lucide-react';
 import type { AppRoute } from '../data/libraryData';
+import { registerFirebaseEmailAccount } from '../lib/firebase';
 import { getApiBaseUrl, isBackendConnected } from '../utils/apiConfig';
+import { apiFetch } from '../utils/clientSession';
 import { BrandLogo } from './BrandLogo';
 import {
   ACADEMIC_YEARS,
@@ -81,6 +83,7 @@ export function StudentRegistrationPage({ onNavigate }: StudentRegistrationPageP
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submittedPayload, setSubmittedPayload] = useState<FlaskRegistrationPayload | null>(null);
   const [isPrototypeSuccess, setIsPrototypeSuccess] = useState(false);
+  const [firebaseVerificationSent, setFirebaseVerificationSent] = useState(false);
   const [illustrationError, setIllustrationError] = useState(false);
 
   const passwordStrength = evaluatePasswordStrength(formData.password);
@@ -148,12 +151,19 @@ export function StudentRegistrationPage({ onNavigate }: StudentRegistrationPageP
 
     try {
       if (isBackendConnected()) {
-        const response = await fetch(`${configuredApiBase}/api/auth/register`, {
+        const fbRegistration = await registerFirebaseEmailAccount(
+          payload.user.email,
+          formData.password,
+          payload.student.full_name
+        );
+
+        const response = await apiFetch(`${configuredApiBase}/api/auth/register`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             ...payload,
             password: formData.password,
+            firebase_uid: fbRegistration.uid,
           }),
         });
 
@@ -161,8 +171,8 @@ export function StudentRegistrationPage({ onNavigate }: StudentRegistrationPageP
           let message = 'Registration failed. Please verify your details and try again.';
           try {
             const errJson = (await response.json()) as { error?: string; message?: string };
-            if (errJson.error || errJson.message) {
-              message = errJson.error ?? errJson.message ?? message;
+            if (errJson.message || errJson.error) {
+              message = errJson.message ?? errJson.error ?? message;
             }
           } catch {
             // Keep generic fallback message if response is non-JSON
@@ -172,6 +182,7 @@ export function StudentRegistrationPage({ onNavigate }: StudentRegistrationPageP
           return;
         }
 
+        setFirebaseVerificationSent(Boolean(fbRegistration.verificationSent));
         setIsPrototypeSuccess(false);
         setSubmittedPayload(payload);
         setIsSubmitting(false);
@@ -314,8 +325,8 @@ export function StudentRegistrationPage({ onNavigate }: StudentRegistrationPageP
                 <div className="flex items-start gap-2.5">
                   <Database className="mt-0.5 h-4 w-4 shrink-0 text-[#2563EB]" aria-hidden="true" />
                   <p className="text-xs leading-relaxed text-slate-600">
-                    Interests and preferred subjects captured here structure your profile for the
-                    planned Python Flask, MySQL, and Pandas hybrid recommendation engine.
+                    Interests and preferred subjects captured here are saved to your student profile
+                    for personalized AI book recommendations.
                   </p>
                 </div>
               </div>
@@ -417,8 +428,10 @@ export function StudentRegistrationPage({ onNavigate }: StudentRegistrationPageP
                       </div>
                     </dl>
                     <p className="mt-4 border-t border-slate-200 pt-3 font-mono-tabular text-[11px] text-slate-500">
-                      Target MySQL Tables: users · students · student_interests · student_subjects
-                      (password hashed server-side)
+                      Saved to Relational SQLite Database · Account Active (password hashed server-side)
+                      {firebaseVerificationSent
+                        ? ' · Cloud verification email sent for cross-session backup'
+                        : ''}
                     </p>
                   </div>
 
@@ -452,10 +465,10 @@ export function StudentRegistrationPage({ onNavigate }: StudentRegistrationPageP
                       />
                       <p className="text-xs leading-relaxed text-slate-700">
                         <strong className="font-semibold text-[#142B4A]">
-                          Frontend Prototype:
+                          Live Account Registration:
                         </strong>{' '}
-                        Full client-side validation and MySQL schema preparation are active. Connect
-                        your Python Flask backend to persist accounts and hash passwords securely.
+                        Your student profile is saved directly to the library database with
+                        server-side scrypt password hashing.
                       </p>
                     </div>
                   </div>

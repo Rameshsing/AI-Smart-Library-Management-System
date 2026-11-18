@@ -21,6 +21,7 @@ import {
 import type { AppRoute } from '../../data/libraryData';
 import type { LibrarianPermissions } from '../../utils/librarianDashboard';
 import { getApiBaseUrl, isBackendConnected } from '../../utils/apiConfig';
+import { apiFetch } from '../../utils/clientSession';
 import {
   buildInventoryApiParams,
   countActiveInventoryFilters,
@@ -162,7 +163,7 @@ export function LibrarianInventoryPage({
 
       try {
         const params = buildInventoryApiParams(activeFilters);
-        const response = await fetch(
+        const response = await apiFetch(
           `${apiBaseUrl.replace(/\/+$/, '')}/api/librarian/books?${params.toString()}`,
           {
             method: 'GET',
@@ -215,7 +216,7 @@ export function LibrarianInventoryPage({
       }
 
       try {
-        const response = await fetch(
+        const response = await apiFetch(
           `${apiBaseUrl.replace(/\/+$/, '')}/api/librarian/books/${book.book_id}/copies`,
           {
             method: 'GET',
@@ -269,7 +270,7 @@ export function LibrarianInventoryPage({
           : `${apiBaseUrl.replace(/\/+$/, '')}/api/librarian/books/${editorState.book?.book_id}`;
       const method = editorState.mode === 'create' ? 'POST' : 'PUT';
 
-      const response = await fetch(endpoint, {
+      const response = await apiFetch(endpoint, {
         method,
         credentials: 'include',
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
@@ -338,7 +339,7 @@ export function LibrarianInventoryPage({
     }
 
     try {
-      const response = await fetch(
+      const response = await apiFetch(
         `${apiBaseUrl.replace(/\/+$/, '')}/api/librarian/books/${book.book_id}/archive`,
         {
           method: 'POST',
@@ -380,7 +381,7 @@ export function LibrarianInventoryPage({
     }
 
     try {
-      const response = await fetch(
+      const response = await apiFetch(
         `${apiBaseUrl.replace(/\/+$/, '')}/api/librarian/copies/${copy.copy_id}`,
         {
           method: 'PUT',
@@ -429,7 +430,7 @@ export function LibrarianInventoryPage({
     }
 
     try {
-      const response = await fetch(
+      const response = await apiFetch(
         `${apiBaseUrl.replace(/\/+$/, '')}/api/librarian/books/${copiesBook.book_id}/copies`,
         {
           method: 'POST',

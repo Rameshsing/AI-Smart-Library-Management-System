@@ -19,6 +19,7 @@ import {
   type LibrarianPermissions,
 } from '../../utils/librarianDashboard';
 import { getApiBaseUrl, isBackendConnected } from '../../utils/apiConfig';
+import { apiFetch } from '../../utils/clientSession';
 import {
   computeBorrowingLoanMetrics,
   createSampleCirculationStore,
@@ -109,7 +110,7 @@ export function ReturnBooksPage({
     let active = true;
     (async () => {
       try {
-        const res = await fetch(
+        const res = await apiFetch(
           `${apiBaseUrl.replace(/\/+$/, '')}/api/librarian/circulation/policy`,
           { method: 'GET', credentials: 'include', headers: { Accept: 'application/json' } }
         );
@@ -167,7 +168,7 @@ export function ReturnBooksPage({
         params.set('status', filter);
         if (showReturned) params.set('include_returned', '1');
 
-        const res = await fetch(
+        const res = await apiFetch(
           `${apiBaseUrl.replace(/\/+$/, '')}/api/librarian/borrowings/active?${params.toString()}`,
           { method: 'GET', credentials: 'include', headers: { Accept: 'application/json' } }
         );
@@ -213,7 +214,7 @@ export function ReturnBooksPage({
 
     if (hasBackendApi) {
       try {
-        const res = await fetch(
+        const res = await apiFetch(
           `${apiBaseUrl.replace(/\/+$/, '')}/api/librarian/books/${borrowing.book_id}/reservations`,
           { method: 'GET', credentials: 'include', headers: { Accept: 'application/json' } }
         );
@@ -273,7 +274,7 @@ export function ReturnBooksPage({
     setIsSubmitting(true);
 
     try {
-      const response = await fetch(`${apiBaseUrl.replace(/\/+$/, '')}/api/librarian/returns`, {
+      const response = await apiFetch(`${apiBaseUrl.replace(/\/+$/, '')}/api/librarian/returns`, {
         method: 'POST',
         credentials: 'include',
         headers: {

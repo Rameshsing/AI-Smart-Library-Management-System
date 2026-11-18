@@ -3,6 +3,7 @@ import { ArrowLeft, Info, Lock } from 'lucide-react';
 import type { AppRoute } from '../../data/libraryData';
 import type { LibrarianPermissions } from '../../utils/librarianDashboard';
 import { getApiBaseUrl, isBackendConnected } from '../../utils/apiConfig';
+import { apiFetch } from '../../utils/clientSession';
 import {
   generateAccessionNumbers,
   type InventoryBookItem,
@@ -108,12 +109,12 @@ export function AddBookPage({
     try {
       const base = apiBaseUrl.replace(/\/+$/, '');
       const [metaRes, booksRes] = await Promise.all([
-        fetch(`${base}/api/librarian/books/metadata`, {
+        apiFetch(`${base}/api/librarian/books/metadata`, {
           method: 'GET',
           credentials: 'include',
           headers: { Accept: 'application/json' },
         }),
-        fetch(`${base}/api/librarian/books?limit=50`, {
+        apiFetch(`${base}/api/librarian/books?limit=50`, {
           method: 'GET',
           credentials: 'include',
           headers: { Accept: 'application/json' },
@@ -232,7 +233,7 @@ export function AddBookPage({
       if (hasBackendApi && (cleanIsbn.length >= 6 || cleanTitle.length >= 5)) {
         try {
           const q = cleanIsbn.length >= 6 ? cleanIsbn : cleanTitle;
-          const res = await fetch(
+          const res = await apiFetch(
             `${apiBaseUrl.replace(/\/+$/, '')}/api/librarian/books?search=${encodeURIComponent(q)}&limit=10`,
             {
               method: 'GET',
@@ -459,7 +460,7 @@ export function AddBookPage({
         });
       }
 
-      const response = await fetch(endpoint, {
+      const response = await apiFetch(endpoint, {
         method: 'POST',
         credentials: 'include',
         headers: {

@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import type { AppRoute } from '../../data/libraryData';
 import { getApiBaseUrl, isBackendConnected } from '../../utils/apiConfig';
+import { apiFetch } from '../../utils/clientSession';
 import { formatDueRemainingLabel, getBorrowUrgency } from '../../utils/studentDashboard';
 
 interface MyBookBorrowingItem {
@@ -70,7 +71,7 @@ export const MyBooksPage: React.FC<MyBooksPageProps> = ({
     }
 
     try {
-      const response = await fetch(`${apiBaseUrl}/api/student/borrowings`, {
+      const response = await apiFetch(`${apiBaseUrl}/api/student/borrowings`, {
         method: 'GET',
         credentials: 'include',
         headers: { Accept: 'application/json' },
@@ -110,7 +111,7 @@ export const MyBooksPage: React.FC<MyBooksPageProps> = ({
 
     try {
       const apiBaseUrl = getApiBaseUrl();
-      const response = await fetch(
+      const response = await apiFetch(
         `${apiBaseUrl}/api/student/borrowings/${item.borrowing_id}/renew`,
         {
           method: 'POST',

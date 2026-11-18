@@ -25,6 +25,7 @@ import {
   type LibrarianPermissions,
 } from '../../utils/librarianDashboard';
 import { getApiBaseUrl, isBackendConnected } from '../../utils/apiConfig';
+import { apiFetch } from '../../utils/clientSession';
 import {
   buildOverdueApiQueryParams,
   buildOverdueReminderPreview,
@@ -159,7 +160,7 @@ export function OverdueBooksPage({ permissions, onNavigate }: OverdueBooksPagePr
     setIsLoading(true);
     try {
       const params = buildOverdueApiQueryParams(filterCriteria, policyRef.current, page, PAGE_SIZE);
-      const res = await fetch(
+      const res = await apiFetch(
         `${apiBaseUrl.replace(/\/+$/, '')}/api/librarian/overdue?${params.toString()}`,
         {
           method: 'GET',
@@ -279,7 +280,7 @@ export function OverdueBooksPage({ permissions, onNavigate }: OverdueBooksPagePr
 
     setIsLoadingDetail(true);
     try {
-      const res = await fetch(
+      const res = await apiFetch(
         `${apiBaseUrl.replace(/\/+$/, '')}/api/librarian/overdue/${record.borrowing_id}`,
         {
           method: 'GET',
@@ -342,7 +343,7 @@ export function OverdueBooksPage({ permissions, onNavigate }: OverdueBooksPagePr
 
     setIsSendingReminder(true);
     try {
-      const res = await fetch(
+      const res = await apiFetch(
         `${apiBaseUrl.replace(/\/+$/, '')}/api/librarian/overdue/${singleReminderTarget.borrowing_id}/remind`,
         {
           method: 'POST',
@@ -403,7 +404,7 @@ export function OverdueBooksPage({ permissions, onNavigate }: OverdueBooksPagePr
 
     setIsSendingReminder(true);
     try {
-      const res = await fetch(`${apiBaseUrl.replace(/\/+$/, '')}/api/librarian/overdue/bulk-remind`, {
+      const res = await apiFetch(`${apiBaseUrl.replace(/\/+$/, '')}/api/librarian/overdue/bulk-remind`, {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },

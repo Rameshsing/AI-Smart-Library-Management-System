@@ -33,6 +33,7 @@ export interface DbUser {
   email: string;
   code: string; // student_code / staff_code
   password_hash: string; // scrypt "salt:hash"
+  firebase_uid?: string | null;
   account_status: 'Active' | 'Blocked' | 'Suspended' | 'Inactive';
   avatar_url: string | null;
   must_change_password: boolean;
@@ -287,5 +288,6 @@ export type SessionResponsePayload = {
   permissions?: AdminPermissions;
   sessions?: LibrarianSessionRecord[];
   staffAccount?: StaffAccountRecord;
+  session_token?: string;
   message?: string;
 };

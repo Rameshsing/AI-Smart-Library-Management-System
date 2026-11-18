@@ -27,6 +27,7 @@ import {
   type LibrarianPermissions,
 } from '../../utils/librarianDashboard';
 import { getApiBaseUrl, isBackendConnected } from '../../utils/apiConfig';
+import { apiFetch } from '../../utils/clientSession';
 import {
   buildReportCsvContent,
   buildReportsApiQueryParams,
@@ -108,7 +109,7 @@ export function ReportsAnalyticsPage({
 
       try {
         const query = buildReportsApiQueryParams(activeFilters).toString();
-        const res = await fetch(
+        const res = await apiFetch(
           `${apiBaseUrl.replace(/\/+$/, '')}/api/librarian/reports/summary?${query}`,
           {
             method: 'GET',
@@ -407,7 +408,7 @@ export function ReportsAnalyticsPage({
     }
     const query = buildReportsApiQueryParams(filters).toString();
     try {
-      const res = await fetch(
+      const res = await apiFetch(
         `${apiBaseUrl.replace(/\/+$/, '')}/api/librarian/reports/export?format=pdf&tab=${activeTab}&${query}`,
         { method: 'GET', credentials: 'include' }
       );

@@ -181,6 +181,8 @@ export function validateStudentRegistration(
 
   if (!form.studentId.trim()) {
     errors.studentId = 'Please enter your student ID or roll number.';
+  } else if (form.studentId.trim().length < 3) {
+    errors.studentId = 'Student ID must be at least 3 characters.';
   }
 
   const trimmedEmail = form.email.trim();

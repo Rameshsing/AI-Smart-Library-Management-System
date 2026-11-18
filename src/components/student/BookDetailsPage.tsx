@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import type { AppRoute } from '../../data/libraryData';
 import { getApiBaseUrl, isBackendConnected } from '../../utils/apiConfig';
+import { apiFetch } from '../../utils/clientSession';
 import { getBookAvailabilityInfo } from '../../utils/bookCatalog';
 import {
   calculateDueDateIso,
@@ -111,7 +112,7 @@ export function BookDetailsPage({
 
       if (backendConnected) {
         try {
-          const response = await fetch(
+          const response = await apiFetch(
             `${apiBaseUrl}/api/books/${encodeURIComponent(bookIdentifier)}`,
             {
               method: 'GET',
@@ -200,7 +201,7 @@ export function BookDetailsPage({
     setBorrowError(null);
 
     try {
-      const response = await fetch(`${apiBaseUrl}/api/borrowings`, {
+      const response = await apiFetch(`${apiBaseUrl}/api/borrowings`, {
         method: 'POST',
         credentials: 'include',
         headers: {
@@ -261,7 +262,7 @@ export function BookDetailsPage({
     setReserveError(null);
 
     try {
-      const response = await fetch(`${apiBaseUrl}/api/reservations`, {
+      const response = await apiFetch(`${apiBaseUrl}/api/reservations`, {
         method: 'POST',
         credentials: 'include',
         headers: {
@@ -309,7 +310,7 @@ export function BookDetailsPage({
     setCancelReserveError(null);
 
     try {
-      const response = await fetch(
+      const response = await apiFetch(
         `${apiBaseUrl}/api/reservations/${encodeURIComponent(String(reservationId))}`,
         {
           method: 'DELETE',
@@ -355,7 +356,7 @@ export function BookDetailsPage({
 
     try {
       const method = data.student_eligibility.existing_review ? 'PUT' : 'POST';
-      const response = await fetch(
+      const response = await apiFetch(
         `${apiBaseUrl}/api/books/${encodeURIComponent(String(data.book.book_id))}/reviews`,
         {
           method,

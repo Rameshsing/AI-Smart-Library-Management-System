@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import type { AppRoute } from '../../data/libraryData';
 import { getApiBaseUrl, isBackendConnected } from '../../utils/apiConfig';
+import { apiFetch } from '../../utils/clientSession';
 import { buildPaginationTokens } from '../../utils/bookCatalog';
 import type { StudentProfile } from '../../utils/studentDashboard';
 import {
@@ -145,7 +146,7 @@ export function ReadingHistoryPage({
       if (backendConnected) {
         try {
           const params = buildReadingHistoryApiParams(filters);
-          const response = await fetch(
+          const response = await apiFetch(
             `${apiBaseUrl}/api/student/reading-history?${params.toString()}`,
             {
               method: 'GET',
@@ -246,7 +247,7 @@ export function ReadingHistoryPage({
 
     try {
       const isEdit = record.student_rating !== null;
-      const response = await fetch(
+      const response = await apiFetch(
         `${apiBaseUrl}/api/books/${encodeURIComponent(String(record.book_id))}/reviews`,
         {
           method: isEdit ? 'PUT' : 'POST',

@@ -23,6 +23,7 @@ import {
   type StudentActivityPayload,
 } from '../../utils/librarianDashboard';
 import { getApiBaseUrl, isBackendConnected } from '../../utils/apiConfig';
+import { apiFetch, clearClientSessionToken  } from '../../utils/clientSession';
 import { LibrarianShell } from './LibrarianShell';
 import {
   LibrarianQuickActions,
@@ -147,7 +148,7 @@ export function LibrarianDashboardPage({
       if (!hasBackendApi) {
         throw new Error('Backend API URL is not configured.');
       }
-      const response = await fetch(`${apiBaseUrl.replace(/\/+$/, '')}${path}`, {
+      const response = await apiFetch(`${apiBaseUrl.replace(/\/+$/, '')}${path}`, {
         method: 'GET',
         credentials: 'include',
         headers: { Accept: 'application/json' },
@@ -411,7 +412,7 @@ export function LibrarianDashboardPage({
   const handleLogout = async () => {
     if (hasBackendApi) {
       try {
-        await fetch(`${apiBaseUrl.replace(/\/+$/, '')}/api/auth/logout`, {
+        await apiFetch(`${apiBaseUrl.replace(/\/+$/, '')}/api/auth/logout`, {
           method: 'POST',
           credentials: 'include',
         });
@@ -419,6 +420,7 @@ export function LibrarianDashboardPage({
         // Proceed to staff login
       }
     }
+    clearClientSessionToken();
     onNavigate({ name: 'admin-login' });
   };
 

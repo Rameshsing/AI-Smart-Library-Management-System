@@ -25,6 +25,7 @@ import {
   type LibrarianPermissions,
 } from '../../utils/librarianDashboard';
 import { getApiBaseUrl, isBackendConnected } from '../../utils/apiConfig';
+import { apiFetch } from '../../utils/clientSession';
 import {
   buildAnnouncementApiPayload,
   buildAnnouncementsApiQueryParams,
@@ -163,7 +164,7 @@ export function LibraryAnnouncementsPage({
     setIsLoading(true);
     try {
       const params = buildAnnouncementsApiQueryParams(filterCriteria, page, PAGE_SIZE);
-      const res = await fetch(
+      const res = await apiFetch(
         `${apiBaseUrl.replace(/\/+$/, '')}/api/librarian/announcements?${params.toString()}`,
         {
           method: 'GET',
@@ -263,7 +264,7 @@ export function LibraryAnnouncementsPage({
     setInspectedItem(ann);
     if (!hasBackendApi) return;
     try {
-      const res = await fetch(
+      const res = await apiFetch(
         `${apiBaseUrl.replace(/\/+$/, '')}/api/librarian/announcements/${ann.announcement_id}`,
         { method: 'GET', credentials: 'include', headers: { Accept: 'application/json' } }
       );
@@ -337,7 +338,7 @@ export function LibraryAnnouncementsPage({
         ? `${apiBaseUrl.replace(/\/+$/, '')}/api/librarian/announcements/${editingItem.announcement_id}`
         : `${apiBaseUrl.replace(/\/+$/, '')}/api/librarian/announcements`;
 
-      const res = await fetch(endpoint, {
+      const res = await apiFetch(endpoint, {
         method: editingItem ? 'PUT' : 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
@@ -389,7 +390,7 @@ export function LibraryAnnouncementsPage({
     setIsSubmitting(true);
     setSubmitError(null);
     try {
-      const res = await fetch(
+      const res = await apiFetch(
         `${apiBaseUrl.replace(/\/+$/, '')}/api/librarian/announcements/${ann.announcement_id}/publish`,
         {
           method: 'POST',
@@ -433,7 +434,7 @@ export function LibraryAnnouncementsPage({
     setIsSubmitting(true);
     setSubmitError(null);
     try {
-      const res = await fetch(
+      const res = await apiFetch(
         `${apiBaseUrl.replace(/\/+$/, '')}/api/librarian/announcements/${archiveConfirmTarget.announcement_id}/archive`,
         {
           method: 'POST',

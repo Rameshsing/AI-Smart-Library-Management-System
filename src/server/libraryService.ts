@@ -6,6 +6,13 @@ import {
   RECOMMENDATION_SCORING_CONFIG,
 } from '../utils/recommendationEngine.ts';
 import {
+  formatAuthDbDebugLog,
+  resolveDatabaseConnectionConfig,
+  verifyDatabaseModels,
+  type AuthDbDebugEvent,
+  type DatabaseConnectionConfig,
+} from './dbConfig.ts';
+import {
   hashPassword,
   sanitizeAuditDetails,
   sanitizePlainText,
@@ -24,6 +31,7 @@ import {
   resolveTargetStudents,
   runMaintenanceScheduler,
 } from './scheduler.ts';
+import { SqliteLibraryStore } from './sqliteStore.ts';
 import type {
   DbAnnouncement,
   DbBook,
@@ -96,19 +104,50 @@ export class HttpError extends Error {
 export interface LibraryStoreOptions {
   dbFilePath?: string | null;
   initialState?: LibraryDbState;
+  authDebugLogger?: ((line: string, event: AuthDbDebugEvent) => void) | false;
 }
 
 export class LibraryService {
   state: LibraryDbState;
   private dbFilePath: string | null;
+  private sqliteStore: SqliteLibraryStore | null = null;
+  readonly dbConfig: DatabaseConnectionConfig;
+  private authDebugLogger: ((line: string, event: AuthDbDebugEvent) => void) | null;
 
   constructor(options: LibraryStoreOptions = {}) {
     this.dbFilePath = options.dbFilePath ?? null;
+    this.dbConfig = resolveDatabaseConnectionConfig(
+      process.env,
+      process.cwd(),
+      options.initialState ? null : this.dbFilePath
+    );
+    this.authDebugLogger =
+      options.authDebugLogger === false
+        ? null
+        : options.authDebugLogger ?? ((line) => console.info(line));
+
     if (options.initialState) {
       this.state = options.initialState;
+    } else if (this.dbConfig.engine === 'sqlite' && this.dbFilePath) {
+      this.sqliteStore = new SqliteLibraryStore(this.dbFilePath);
+      const legacyJsonPath = path.join(path.dirname(this.dbFilePath), 'library-db.json');
+      this.state = this.sqliteStore.loadOrInitialize(legacyJsonPath);
     } else if (this.dbFilePath && fs.existsSync(this.dbFilePath)) {
       const raw = fs.readFileSync(this.dbFilePath, 'utf8');
-      this.state = JSON.parse(raw) as LibraryDbState;
+      const parsed = JSON.parse(raw) as Partial<LibraryDbState>;
+      const verification = verifyDatabaseModels(parsed);
+      if (!verification.valid) {
+        const defaults = createSeedDatabaseState();
+        this.state = {
+          ...defaults,
+          ...parsed,
+          nextIds: { ...defaults.nextIds, ...(parsed.nextIds ?? {}) },
+          librarySettings: parsed.librarySettings ?? defaults.librarySettings,
+        } as LibraryDbState;
+        this.persist();
+      } else {
+        this.state = parsed as LibraryDbState;
+      }
       reconcileAllBookCounts(this.state);
     } else {
       this.state = createSeedDatabaseState();
@@ -116,7 +155,42 @@ export class LibraryService {
     }
   }
 
+  getDatabaseDiagnostics() {
+    const modelVerification = verifyDatabaseModels(this.state);
+    return {
+      connected: true,
+      engine: this.dbConfig.engine,
+      connection_source: this.dbConfig.connectionSource,
+      target: this.dbConfig.sanitizedTarget,
+      external_database_url_configured: this.dbConfig.externalDatabaseUrlConfigured,
+      ephemeral_local_storage: this.dbConfig.isEphemeralLocalStorage,
+      models_verified: modelVerification.valid,
+      missing_models: modelVerification.missingModels,
+      invalid_user_ids: modelVerification.invalidUserIds,
+      model_counts: modelVerification.modelCounts,
+    };
+  }
+
+  emitAuthDebug(
+    event: Omit<AuthDbDebugEvent, 'connected' | 'engine' | 'target' | 'usersScanned'>
+  ): void {
+    if (!this.authDebugLogger) return;
+    const fullEvent: AuthDbDebugEvent = {
+      ...event,
+      connected: true,
+      engine: this.dbConfig.engine,
+      target: this.dbConfig.sanitizedTarget,
+      usersScanned: this.state.users.length,
+    };
+    const line = formatAuthDbDebugLog(fullEvent);
+    this.authDebugLogger(line, fullEvent);
+  }
+
   persist(): void {
+    if (this.sqliteStore) {
+      this.sqliteStore.saveState(this.state);
+      return;
+    }
     if (!this.dbFilePath) return;
     const dir = path.dirname(this.dbFilePath);
     if (!fs.existsSync(dir)) {
@@ -125,6 +199,11 @@ export class LibraryService {
     const tmpPath = `${this.dbFilePath}.tmp`;
     fs.writeFileSync(tmpPath, JSON.stringify(this.state, null, 2), 'utf8');
     fs.renameSync(tmpPath, this.dbFilePath);
+  }
+
+  close(): void {
+    this.sqliteStore?.close();
+    this.sqliteStore = null;
   }
 
   runScheduler(now: Date = new Date()) {
@@ -214,15 +293,52 @@ export class LibraryService {
     password: string,
     requestedRole?: UserRole
   ): DbUser {
+    const startedAt = performance.now();
     const cleanId = identifier.trim().toLowerCase();
     if (!cleanId || !password) {
+      this.emitAuthDebug({
+        operation: 'login_query',
+        identifier: cleanId || '<empty>',
+        recordFound: false,
+        passwordVerified: false,
+        queryDurationMs: performance.now() - startedAt,
+        outcome: 'invalid_input',
+      });
       throw new HttpError(400, 'Identifier and password are required.', 'INVALID_INPUT');
     }
 
     const user = this.state.users.find(
       (u) => u.email.toLowerCase() === cleanId || u.code.toLowerCase() === cleanId
     );
-    if (!user || !verifyPassword(password, user.password_hash)) {
+    if (!user) {
+      this.emitAuthDebug({
+        operation: 'login_query',
+        identifier: cleanId,
+        recordFound: false,
+        passwordVerified: false,
+        queryDurationMs: performance.now() - startedAt,
+        outcome: 'user_not_found',
+      });
+      throw new HttpError(
+        401,
+        'Invalid credentials. Please check your email/ID and password.',
+        'INVALID_CREDENTIALS'
+      );
+    }
+
+    const passwordMatched = verifyPassword(password, user.password_hash);
+    if (!passwordMatched) {
+      this.emitAuthDebug({
+        operation: 'login_query',
+        identifier: cleanId,
+        recordFound: true,
+        userId: user.user_id,
+        role: user.role,
+        accountStatus: user.account_status,
+        passwordVerified: false,
+        queryDurationMs: performance.now() - startedAt,
+        outcome: 'password_mismatch',
+      });
       throw new HttpError(
         401,
         'Invalid credentials. Please check your email/ID and password.',
@@ -231,6 +347,17 @@ export class LibraryService {
     }
 
     if (user.account_status !== 'Active') {
+      this.emitAuthDebug({
+        operation: 'login_query',
+        identifier: cleanId,
+        recordFound: true,
+        userId: user.user_id,
+        role: user.role,
+        accountStatus: user.account_status,
+        passwordVerified: true,
+        queryDurationMs: performance.now() - startedAt,
+        outcome: 'account_inactive',
+      });
       throw new HttpError(
         403,
         `Your account status is ${user.account_status}. Please contact a library administrator.`,
@@ -239,12 +366,35 @@ export class LibraryService {
     }
 
     if (requestedRole && user.role !== requestedRole) {
+      this.emitAuthDebug({
+        operation: 'login_query',
+        identifier: cleanId,
+        recordFound: true,
+        userId: user.user_id,
+        role: user.role,
+        accountStatus: user.account_status,
+        passwordVerified: true,
+        queryDurationMs: performance.now() - startedAt,
+        outcome: `role_mismatch_expected_${requestedRole}`,
+      });
       throw new HttpError(
         403,
         `Account role mismatch: your account is registered as "${user.role}", not "${requestedRole}".`,
         'ROLE_MISMATCH'
       );
     }
+
+    this.emitAuthDebug({
+      operation: 'login_query',
+      identifier: cleanId,
+      recordFound: true,
+      userId: user.user_id,
+      role: user.role,
+      accountStatus: user.account_status,
+      passwordVerified: true,
+      queryDurationMs: performance.now() - startedAt,
+      outcome: 'authenticated',
+    });
 
     return user;
   }
@@ -257,12 +407,20 @@ export class LibraryService {
     academic_year: string;
     password: string;
     interests: string[];
+    preferred_subjects?: string[];
+    mobile?: string | null;
+    institution?: string;
+    firebase_uid?: string | null;
   }): DbUser {
+    const startedAt = performance.now();
     const cleanName = sanitizePlainText(input.full_name);
     const cleanEmail = input.email.trim().toLowerCase();
     const cleanCode = input.student_id.trim().toUpperCase();
     const cleanDept = sanitizePlainText(input.department) || 'Computer Science';
     const cleanYear = sanitizePlainText(input.academic_year) || '1st Year';
+    const cleanInstitution = sanitizePlainText(input.institution ?? '');
+    const cleanMobile = input.mobile ? sanitizePlainText(input.mobile) : null;
+    const cleanFirebaseUid = input.firebase_uid ? sanitizePlainText(input.firebase_uid) : null;
 
     if (!cleanName || cleanName.length < 2) {
       throw new HttpError(400, 'Please enter your full name.', 'INVALID_NAME');
@@ -302,6 +460,9 @@ export class LibraryService {
     const cleanInterests = input.interests
       .map((i) => sanitizePlainText(i))
       .filter(Boolean);
+    const cleanSubjects = Array.isArray(input.preferred_subjects)
+      ? input.preferred_subjects.map((s) => sanitizePlainText(s)).filter(Boolean)
+      : [];
 
     const newUser: DbUser = {
       user_id: userId,
@@ -310,6 +471,7 @@ export class LibraryService {
       email: cleanEmail,
       code: cleanCode,
       password_hash: hashPassword(input.password),
+      firebase_uid: cleanFirebaseUid,
       account_status: 'Active',
       avatar_url: null,
       must_change_password: false,
@@ -317,12 +479,14 @@ export class LibraryService {
       updated_at: nowIso,
       department: cleanDept,
       program: `B.Tech ${cleanDept}`,
-      institution: this.state.librarySettings.general_settings.library_name,
+      institution:
+        cleanInstitution || this.state.librarySettings.general_settings.library_name,
       academic_year: cleanYear,
       semester: 'Semester 1',
-      mobile: null,
+      mobile: cleanMobile,
       interests: cleanInterests,
-      preferred_subjects: cleanInterests.slice(0, 3),
+      preferred_subjects:
+        cleanSubjects.length > 0 ? cleanSubjects : cleanInterests.slice(0, 3),
       preferred_authors: [],
       restriction_reason: null,
       recommendation_preferences: {
@@ -374,7 +538,412 @@ export class LibraryService {
       dedupe_key: `welcome-${newUser.user_id}`,
     });
     this.persist();
+    this.emitAuthDebug({
+      operation: 'register_query',
+      identifier: cleanEmail,
+      recordFound: true,
+      userId: newUser.user_id,
+      role: newUser.role,
+      accountStatus: newUser.account_status,
+      persisted: Boolean(this.dbFilePath),
+      queryDurationMs: performance.now() - startedAt,
+      outcome: 'student_created',
+    });
     return newUser;
+  }
+
+  authenticateOrProvisionGoogleUser(input: {
+    email: string;
+    name?: string;
+    uid: string;
+    requestedRole?: UserRole;
+    profileHint?: {
+      displayName?: string;
+      studentCode?: string;
+      department?: string;
+      academicYear?: string;
+      interests?: string[];
+      preferredSubjects?: string[];
+    };
+  }): DbUser {
+    const startedAt = performance.now();
+    const cleanEmail = input.email.trim().toLowerCase();
+    if (!cleanEmail || !cleanEmail.includes('@')) {
+      throw new HttpError(400, 'Verified Google email address is required.', 'INVALID_EMAIL');
+    }
+
+    const existing = this.state.users.find(
+      (u) => u.email.toLowerCase() === cleanEmail || (input.uid && u.firebase_uid === input.uid)
+    );
+    if (existing) {
+      if (existing.account_status !== 'Active') {
+        this.emitAuthDebug({
+          operation: 'login_query',
+          identifier: cleanEmail,
+          recordFound: true,
+          userId: existing.user_id,
+          role: existing.role,
+          accountStatus: existing.account_status,
+          passwordVerified: true,
+          queryDurationMs: performance.now() - startedAt,
+          outcome: 'account_inactive_google',
+        });
+        throw new HttpError(
+          403,
+          `Your account status is ${existing.account_status}. Please contact a library administrator.`,
+          'ACCOUNT_INACTIVE'
+        );
+      }
+
+      if (input.requestedRole && existing.role !== input.requestedRole) {
+        this.emitAuthDebug({
+          operation: 'login_query',
+          identifier: cleanEmail,
+          recordFound: true,
+          userId: existing.user_id,
+          role: existing.role,
+          accountStatus: existing.account_status,
+          passwordVerified: true,
+          queryDurationMs: performance.now() - startedAt,
+          outcome: `role_mismatch_expected_${input.requestedRole}`,
+        });
+        throw new HttpError(
+          403,
+          `Account role mismatch: your account is registered as "${existing.role}", not "${input.requestedRole}".`,
+          'ROLE_MISMATCH'
+        );
+      }
+
+      if (input.uid && existing.firebase_uid !== input.uid) {
+        existing.firebase_uid = input.uid;
+        existing.updated_at = new Date().toISOString();
+        this.persist();
+      }
+
+      this.emitAuthDebug({
+        operation: 'login_query',
+        identifier: cleanEmail,
+        recordFound: true,
+        userId: existing.user_id,
+        role: existing.role,
+        accountStatus: existing.account_status,
+        passwordVerified: true,
+        queryDurationMs: performance.now() - startedAt,
+        outcome: 'authenticated_google',
+      });
+      return existing;
+    }
+
+    if (input.requestedRole && input.requestedRole !== 'student') {
+      this.emitAuthDebug({
+        operation: 'login_query',
+        identifier: cleanEmail,
+        recordFound: false,
+        passwordVerified: true,
+        queryDurationMs: performance.now() - startedAt,
+        outcome: `google_unprovisioned_for_${input.requestedRole}`,
+      });
+      throw new HttpError(
+        403,
+        `No ${input.requestedRole} account is provisioned for ${cleanEmail}. Staff and administrator accounts must be created by an administrator.`,
+        'STAFF_ACCOUNT_REQUIRED'
+      );
+    }
+
+    const hint = input.profileHint;
+    const displayName =
+      sanitizePlainText(hint?.displayName ?? '') ||
+      sanitizePlainText(input.name ?? '') ||
+      cleanEmail.split('@')[0] ||
+      'Google Library Member';
+    const userId = this.state.nextIds.user++;
+    const hintedCode = hint?.studentCode ? sanitizePlainText(hint.studentCode).toUpperCase() : '';
+    const canUseHintedCode =
+      hintedCode.length >= 3 &&
+      !this.state.users.some((u) => u.code.toLowerCase() === hintedCode.toLowerCase());
+    const studentCode = canUseHintedCode
+      ? hintedCode
+      : `STU-GGL-${String(userId).padStart(4, '0')}`;
+    const generatedPassword = crypto.randomBytes(24).toString('hex');
+    const nowIso = new Date().toISOString();
+    const defaultInterests = ['Artificial Intelligence', 'Computer Science', 'Data Science'];
+    const hintedInterests = Array.isArray(hint?.interests)
+      ? hint.interests.map((x) => sanitizePlainText(x)).filter(Boolean)
+      : [];
+    const resolvedInterests = hintedInterests.length > 0 ? hintedInterests : defaultInterests;
+    const hintedSubjects = Array.isArray(hint?.preferredSubjects)
+      ? hint.preferredSubjects.map((x) => sanitizePlainText(x)).filter(Boolean)
+      : [];
+    const resolvedSubjects =
+      hintedSubjects.length > 0 ? hintedSubjects : ['Machine Learning', 'Algorithms'];
+    const resolvedDepartment =
+      sanitizePlainText(hint?.department ?? '') || 'Computer Science';
+    const resolvedAcademicYear =
+      sanitizePlainText(hint?.academicYear ?? '') || '1st Year';
+
+    const newUser: DbUser = {
+      user_id: userId,
+      role: 'student',
+      full_name: displayName,
+      email: cleanEmail,
+      code: studentCode,
+      password_hash: hashPassword(generatedPassword),
+      firebase_uid: input.uid,
+      account_status: 'Active',
+      avatar_url: null,
+      must_change_password: false,
+      created_at: nowIso.slice(0, 10),
+      updated_at: nowIso,
+      department: resolvedDepartment,
+      program: `B.Tech ${resolvedDepartment}`,
+      institution: this.state.librarySettings.general_settings.library_name,
+      academic_year: resolvedAcademicYear,
+      semester: 'Semester 1',
+      mobile: null,
+      interests: resolvedInterests,
+      preferred_subjects: resolvedSubjects,
+      preferred_authors: [],
+      restriction_reason: null,
+      recommendation_preferences: {
+        preferred_topics: resolvedInterests.slice(0, 4),
+        discovery_preference: 'balanced',
+        reading_level: 'No preference',
+        content_formats: ['Print Books', 'eBooks'],
+        content_languages: ['English'],
+        avoid_previously_read: true,
+        availability_preference: 'available_first',
+      },
+      notification_preferences: {
+        categories: [
+          { category: 'Borrowing', in_app_enabled: true, email_enabled: true, is_mandatory: false, mandatory_reason: null, email_supported: true },
+          { category: 'Due Date Reminders', in_app_enabled: true, email_enabled: true, is_mandatory: true, mandatory_reason: 'Required to prevent accidental overdue loans', email_supported: true },
+          { category: 'Overdue', in_app_enabled: true, email_enabled: true, is_mandatory: true, mandatory_reason: 'Mandatory institutional circulation notice', email_supported: true },
+          { category: 'Reservations', in_app_enabled: true, email_enabled: true, is_mandatory: false, mandatory_reason: null, email_supported: true },
+          { category: 'Recommendations', in_app_enabled: true, email_enabled: false, is_mandatory: false, mandatory_reason: null, email_supported: true },
+          { category: 'Reviews & Feedback', in_app_enabled: true, email_enabled: false, is_mandatory: false, mandatory_reason: null, email_supported: false },
+          { category: 'Library Announcements', in_app_enabled: true, email_enabled: true, is_mandatory: false, mandatory_reason: null, email_supported: true },
+          { category: 'Account & Security', in_app_enabled: true, email_enabled: true, is_mandatory: true, mandatory_reason: 'Required for password & session security', email_supported: true },
+        ],
+        reminder_timings: ['2_days_before', '1_day_before', 'on_due_date'],
+        allow_reminder_customization: true,
+        email_delivery_configured: true,
+        configured_loan_period_days: this.state.librarySettings.loan_policy.default_loan_duration_days,
+      },
+    };
+
+    this.state.users.push(newUser);
+    this.addNotification({
+      user_id: newUser.user_id,
+      title: 'Welcome via Google Sign-In!',
+      message: `Your student account (${studentCode}) is active and ready for personalised library recommendations.`,
+      category: 'Recommendations',
+      priority: 'Normal',
+      is_read: false,
+      related_entity_type: 'account',
+      related_entity_id: newUser.user_id,
+      related_book_id: null,
+      related_book_title: null,
+      action_label: 'Explore Recommendations',
+      action_url: '/student/recommendations',
+      created_at: nowIso,
+      read_at: null,
+      can_delete: true,
+      is_mandatory: false,
+      announcement_author: null,
+      dedupe_key: `welcome-google-${newUser.user_id}`,
+    });
+    this.persist();
+    this.emitAuthDebug({
+      operation: 'register_query',
+      identifier: cleanEmail,
+      recordFound: true,
+      userId: newUser.user_id,
+      role: newUser.role,
+      accountStatus: newUser.account_status,
+      persisted: Boolean(this.dbFilePath),
+      queryDurationMs: performance.now() - startedAt,
+      outcome: 'student_created_google',
+    });
+    return newUser;
+  }
+
+  restoreOrAuthenticateFirebaseUser(input: {
+    email: string;
+    uid: string;
+    name?: string;
+    password?: string;
+    requestedRole?: UserRole;
+    profileHint?: {
+      displayName?: string;
+      studentCode?: string;
+      department?: string;
+      academicYear?: string;
+      interests?: string[];
+      preferredSubjects?: string[];
+    };
+  }): DbUser {
+    const startedAt = performance.now();
+    const cleanEmail = input.email.trim().toLowerCase();
+    if (!cleanEmail || !cleanEmail.includes('@')) {
+      throw new HttpError(400, 'Verified Firebase email address is required.', 'INVALID_EMAIL');
+    }
+
+    const existing = this.state.users.find(
+      (u) => u.email.toLowerCase() === cleanEmail || (input.uid && u.firebase_uid === input.uid)
+    );
+    if (existing) {
+      if (existing.account_status !== 'Active') {
+        throw new HttpError(
+          403,
+          `Your account status is ${existing.account_status}. Please contact a library administrator.`,
+          'ACCOUNT_INACTIVE'
+        );
+      }
+      if (input.requestedRole && existing.role !== input.requestedRole) {
+        throw new HttpError(
+          403,
+          `Account role mismatch: your account is registered as "${existing.role}", not "${input.requestedRole}".`,
+          'ROLE_MISMATCH'
+        );
+      }
+      let dirty = false;
+      if (input.uid && existing.firebase_uid !== input.uid) {
+        existing.firebase_uid = input.uid;
+        dirty = true;
+      }
+      if (
+        existing.role === 'student' &&
+        input.password &&
+        input.password.length >= 8 &&
+        !verifyPassword(input.password, existing.password_hash)
+      ) {
+        existing.password_hash = hashPassword(input.password);
+        dirty = true;
+      }
+      if (dirty) {
+        existing.updated_at = new Date().toISOString();
+        this.persist();
+      }
+      this.emitAuthDebug({
+        operation: 'login_query',
+        identifier: cleanEmail,
+        recordFound: true,
+        userId: existing.user_id,
+        role: existing.role,
+        accountStatus: existing.account_status,
+        passwordVerified: true,
+        queryDurationMs: performance.now() - startedAt,
+        outcome: 'authenticated_firebase_restore',
+      });
+      return existing;
+    }
+
+    if (input.requestedRole && input.requestedRole !== 'student') {
+      throw new HttpError(
+        403,
+        `No ${input.requestedRole} account is provisioned for ${cleanEmail}. Staff and administrator accounts must be created by an administrator.`,
+        'STAFF_ACCOUNT_REQUIRED'
+      );
+    }
+
+    const hint = input.profileHint;
+    const displayName =
+      sanitizePlainText(hint?.displayName ?? '') ||
+      sanitizePlainText(input.name ?? '') ||
+      cleanEmail.split('@')[0] ||
+      'Student Member';
+    const userId = this.state.nextIds.user++;
+    const hintedCode = hint?.studentCode ? sanitizePlainText(hint.studentCode).toUpperCase() : '';
+    const canUseHintedCode =
+      hintedCode.length >= 3 &&
+      !this.state.users.some((u) => u.code.toLowerCase() === hintedCode.toLowerCase());
+    const studentCode = canUseHintedCode
+      ? hintedCode
+      : `STU-FB-${String(userId).padStart(4, '0')}`;
+    const rawPassword =
+      input.password && input.password.length >= 8
+        ? input.password
+        : crypto.randomBytes(24).toString('hex');
+    const nowIso = new Date().toISOString();
+    const defaultInterests = ['Artificial Intelligence', 'Computer Science', 'Data Science'];
+    const hintedInterests = Array.isArray(hint?.interests)
+      ? hint.interests.map((x) => sanitizePlainText(x)).filter(Boolean)
+      : [];
+    const resolvedInterests = hintedInterests.length > 0 ? hintedInterests : defaultInterests;
+    const hintedSubjects = Array.isArray(hint?.preferredSubjects)
+      ? hint.preferredSubjects.map((x) => sanitizePlainText(x)).filter(Boolean)
+      : [];
+    const resolvedSubjects =
+      hintedSubjects.length > 0 ? hintedSubjects : ['Algorithms', 'Machine Learning'];
+    const resolvedDepartment =
+      sanitizePlainText(hint?.department ?? '') || 'Computer Science';
+    const resolvedAcademicYear =
+      sanitizePlainText(hint?.academicYear ?? '') || '1st Year';
+
+    const restoredUser: DbUser = {
+      user_id: userId,
+      role: 'student',
+      full_name: displayName,
+      email: cleanEmail,
+      code: studentCode,
+      password_hash: hashPassword(rawPassword),
+      firebase_uid: input.uid,
+      account_status: 'Active',
+      avatar_url: null,
+      must_change_password: false,
+      created_at: nowIso.slice(0, 10),
+      updated_at: nowIso,
+      department: resolvedDepartment,
+      program: `B.Tech ${resolvedDepartment}`,
+      institution: this.state.librarySettings.general_settings.library_name,
+      academic_year: resolvedAcademicYear,
+      semester: 'Semester 1',
+      mobile: null,
+      interests: resolvedInterests,
+      preferred_subjects: resolvedSubjects,
+      preferred_authors: [],
+      restriction_reason: null,
+      recommendation_preferences: {
+        preferred_topics: resolvedInterests.slice(0, 4),
+        discovery_preference: 'balanced',
+        reading_level: 'No preference',
+        content_formats: ['Print Books', 'eBooks'],
+        content_languages: ['English'],
+        avoid_previously_read: true,
+        availability_preference: 'available_first',
+      },
+      notification_preferences: {
+        categories: [
+          { category: 'Borrowing', in_app_enabled: true, email_enabled: true, is_mandatory: false, mandatory_reason: null, email_supported: true },
+          { category: 'Due Date Reminders', in_app_enabled: true, email_enabled: true, is_mandatory: true, mandatory_reason: 'Required to prevent accidental overdue loans', email_supported: true },
+          { category: 'Overdue', in_app_enabled: true, email_enabled: true, is_mandatory: true, mandatory_reason: 'Mandatory institutional circulation notice', email_supported: true },
+          { category: 'Reservations', in_app_enabled: true, email_enabled: true, is_mandatory: false, mandatory_reason: null, email_supported: true },
+          { category: 'Recommendations', in_app_enabled: true, email_enabled: false, is_mandatory: false, mandatory_reason: null, email_supported: true },
+          { category: 'Reviews & Feedback', in_app_enabled: true, email_enabled: false, is_mandatory: false, mandatory_reason: null, email_supported: false },
+          { category: 'Library Announcements', in_app_enabled: true, email_enabled: true, is_mandatory: false, mandatory_reason: null, email_supported: true },
+          { category: 'Account & Security', in_app_enabled: true, email_enabled: true, is_mandatory: true, mandatory_reason: 'Required for password & session security', email_supported: true },
+        ],
+        reminder_timings: ['2_days_before', '1_day_before', 'on_due_date'],
+        allow_reminder_customization: true,
+        email_delivery_configured: true,
+        configured_loan_period_days: this.state.librarySettings.loan_policy.default_loan_duration_days,
+      },
+    };
+
+    this.state.users.push(restoredUser);
+    this.persist();
+    this.emitAuthDebug({
+      operation: 'register_query',
+      identifier: cleanEmail,
+      recordFound: true,
+      userId: restoredUser.user_id,
+      role: restoredUser.role,
+      accountStatus: restoredUser.account_status,
+      persisted: Boolean(this.dbFilePath),
+      queryDurationMs: performance.now() - startedAt,
+      outcome: 'student_restored_firebase',
+    });
+    return restoredUser;
   }
 
   buildSessionPayload(user: DbUser): SessionResponsePayload {

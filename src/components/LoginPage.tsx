@@ -18,8 +18,15 @@ import {
   X,
 } from 'lucide-react';
 import type { AppRoute } from '../data/libraryData';
+import { googleSignIn, signInFirebaseEmailAccount } from '../lib/firebase';
+import {
+  fetchUserProfileFromFirestore,
+  syncUserProfileToFirestore,
+} from '../lib/firestoreLibrary';
 import { getApiBaseUrl, isBackendConnected } from '../utils/apiConfig';
+import { apiFetch, clearClientSessionToken, saveClientSessionToken  } from '../utils/clientSession';
 import { BrandLogo } from './BrandLogo';
+import { GoogleSignInButton } from './GoogleSignInButton';
 import {
   LOGIN_ILLUSTRATION_IMAGE,
   LOGIN_ROLE_CONFIGS,
@@ -128,7 +135,9 @@ export function LoginPage({ initialRole = 'student', onNavigate }: LoginPageProp
         return;
       }
 
-      const response = await fetch(`${configuredApiBase}/api/auth/login`, {
+      clearClientSessionToken();
+
+      let response = await apiFetch(`${configuredApiBase}/api/auth/login`, {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
@@ -145,6 +154,38 @@ export function LoginPage({ initialRole = 'student', onNavigate }: LoginPageProp
         payload = (await response.json()) as ServerAuthResponse;
       } catch {
         // Leave default unauthenticated payload
+      }
+
+      if (
+        !response.ok &&
+        response.status === 401 &&
+        selectedRole === 'student' &&
+        identifier.includes('@')
+      ) {
+        const fbSignIn = await signInFirebaseEmailAccount(identifier.trim(), password);
+        if (fbSignIn.signedIn) {
+          const restoredProfile = await fetchUserProfileFromFirestore(fbSignIn.user.uid).catch(
+            () => null
+          );
+          const restoreResponse = await apiFetch(`${configuredApiBase}/api/auth/firebase-restore`, {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              id_token: fbSignIn.idToken,
+              password,
+              requested_role: selectedRole,
+              remember_me: roleConfig.showRememberMe ? rememberMe : false,
+              profile_hint: restoredProfile ?? undefined,
+            }),
+          });
+          response = restoreResponse;
+          try {
+            payload = (await restoreResponse.json()) as ServerAuthResponse;
+          } catch {
+            payload = { authenticated: false };
+          }
+        }
       }
 
       if (!response.ok) {
@@ -164,11 +205,143 @@ export function LoginPage({ initialRole = 'student', onNavigate }: LoginPageProp
         return;
       }
 
+      if (payload.session_token) {
+        saveClientSessionToken(
+          payload.session_token,
+          roleConfig.showRememberMe ? rememberMe : false
+        );
+      }
+
       setIsSubmitting(false);
       onNavigate(resolution.targetRoute);
     } catch {
       setAuthError(
         'Unable to reach the authentication server. Your entered details have been preserved.'
+      );
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleGoogleLogin = async () => {
+    if (isSubmitting) return;
+    setFieldErrors({});
+    setAuthError(null);
+    setIsSubmitting(true);
+
+    const configuredApiBase = getApiBaseUrl();
+    try {
+      if (!isBackendConnected()) {
+        setAuthError('Authentication server is unavailable.');
+        setIsSubmitting(false);
+        return;
+      }
+
+      clearClientSessionToken();
+      const googleResult = await googleSignIn();
+      const savedFirestoreProfile = await fetchUserProfileFromFirestore(
+        googleResult.user.uid
+      ).catch(() => null);
+
+      const response = await apiFetch(`${configuredApiBase}/api/auth/firebase-google`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id_token: googleResult.idToken,
+          requested_role: selectedRole,
+          remember_me: roleConfig.showRememberMe ? rememberMe : false,
+          profile_hint: savedFirestoreProfile ?? undefined,
+        }),
+      });
+
+      type GoogleLoginPayload = ServerAuthResponse & {
+        user?: { email?: string; code?: string };
+        student?: {
+          name?: string;
+          student_code?: string;
+          course_department?: string;
+          academic_year?: string;
+          interests?: string[];
+          preferred_subjects?: string[];
+        };
+        librarian?: { full_name?: string; department_title?: string };
+        admin?: { full_name?: string; designation?: string };
+      };
+
+      let payload: GoogleLoginPayload = { authenticated: false };
+      try {
+        payload = (await response.json()) as GoogleLoginPayload;
+      } catch {
+        // Leave default unauthenticated payload
+      }
+
+      if (!response.ok) {
+        setAuthError(
+          payload.message || 'Google sign-in could not be verified for this account role.'
+        );
+        setIsSubmitting(false);
+        return;
+      }
+
+      const resolution = resolveVerifiedDashboardRoute(selectedRole, payload);
+      if (!resolution.allowed || !resolution.targetRoute) {
+        setAuthError(
+          resolution.error || 'Account verification failed for the selected role.'
+        );
+        setIsSubmitting(false);
+        return;
+      }
+
+      if (payload.session_token) {
+        saveClientSessionToken(
+          payload.session_token,
+          roleConfig.showRememberMe ? rememberMe : false
+        );
+      }
+
+      void syncUserProfileToFirestore({
+        uid: googleResult.user.uid,
+        displayName:
+          savedFirestoreProfile?.displayName ||
+          payload.student?.name ||
+          payload.librarian?.full_name ||
+          payload.admin?.full_name ||
+          googleResult.user.displayName ||
+          'Library Member',
+        email: googleResult.user.email || payload.user?.email || '',
+        department:
+          savedFirestoreProfile?.department ||
+          payload.student?.course_department ||
+          payload.librarian?.department_title ||
+          'Library Member',
+        academicYear:
+          savedFirestoreProfile?.academicYear ||
+          payload.student?.academic_year ||
+          payload.admin?.designation ||
+          'Active',
+        interests:
+          savedFirestoreProfile?.interests?.length
+            ? savedFirestoreProfile.interests
+            : payload.student?.interests,
+        preferredSubjects:
+          savedFirestoreProfile?.preferredSubjects?.length
+            ? savedFirestoreProfile.preferredSubjects
+            : payload.student?.preferred_subjects,
+        studentCode:
+          savedFirestoreProfile?.studentCode ||
+          payload.student?.student_code ||
+          payload.user?.code,
+      }).catch(() => {
+        // Firestore sync errors should not block library session login
+      });
+
+      setIsSubmitting(false);
+      onNavigate(resolution.targetRoute);
+    } catch (err) {
+      setAuthError(
+        err instanceof Error
+          ? err.message
+          : 'Google sign-in was cancelled or failed. Please try again.'
       );
       setIsSubmitting(false);
     }
@@ -199,7 +372,7 @@ export function LoginPage({ initialRole = 'student', onNavigate }: LoginPageProp
     const configuredApiBase = getApiBaseUrl();
     try {
       if (isBackendConnected()) {
-        await fetch(`${configuredApiBase}/api/auth/forgot-password`, {
+        await apiFetch(`${configuredApiBase}/api/auth/forgot-password`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -528,6 +701,19 @@ export function LoginPage({ initialRole = 'student', onNavigate }: LoginPageProp
                   <span>{isSubmitting ? 'Signing in...' : 'Sign In'}</span>
                   {!isSubmitting && <ArrowRight className="h-4 w-4" aria-hidden="true" />}
                 </button>
+
+                <div className="relative my-4 flex items-center justify-center">
+                  <span className="h-px w-full bg-slate-200" aria-hidden="true" />
+                  <span className="bg-white px-3 text-xs font-medium text-slate-400">or</span>
+                  <span className="h-px w-full bg-slate-200" aria-hidden="true" />
+                </div>
+
+                <GoogleSignInButton
+                  onClick={() => void handleGoogleLogin()}
+                  disabled={isSubmitting}
+                  label="Sign in with Google"
+                  className="w-full"
+                />
               </form>
 
               {/* Student Registration Link (ONLY for Student role) */}
@@ -555,9 +741,14 @@ export function LoginPage({ initialRole = 'student', onNavigate }: LoginPageProp
               {/* Collapsible Demo Account Credentials (fills form inputs cleanly for real server auth) */}
               <details className="mt-5 rounded-xl border border-slate-200 bg-[#F5F8FC] p-3 text-xs text-[#1E293B]">
                 <summary className="cursor-pointer font-semibold text-[#142B4A] select-none">
-                  Seeded Test Credentials (Verified via Server Auth)
+                  Sample Demo Accounts (Optional)
                 </summary>
                 <div className="mt-2.5 space-y-2">
+                  <p className="text-[11px] leading-relaxed text-[#64748B]">
+                    Accounts created via Sign Up work directly with the live database. You can also
+                    autofill a pre-seeded sample account below to test Librarian, Admin, or Student
+                    portals:
+                  </p>
                   {[
                     {
                       role: 'student' as LoginRole,
@@ -666,10 +857,10 @@ export function LoginPage({ initialRole = 'student', onNavigate }: LoginPageProp
 
                 <div className="rounded-xl border border-[#DBEAFE] bg-[#F5F8FC] p-3.5 text-xs leading-relaxed text-slate-600">
                   <strong className="font-semibold text-[#142B4A]">
-                    Backend Email / OTP Integration:
+                    Password Reset Request Logged:
                   </strong>{' '}
-                  Email and one-time verification code delivery will run through the Python Flask
-                  mail/OTP service (`/api/auth/forgot-password`) once connected.
+                  Your request was recorded by the library server (`/api/auth/forgot-password`).
+                  Please contact a library administrator if you need immediate password recovery.
                 </div>
 
                 <button

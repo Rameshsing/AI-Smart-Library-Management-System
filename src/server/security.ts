@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import type { Request, Response } from 'express';
+import type { CookieOptions, Request, Response } from 'express';
 import type { DbUser } from './types.ts';
 
 export const SESSION_COOKIE_NAME = 'library_sid';
@@ -64,6 +64,14 @@ export function parseCookieHeader(cookieHeader: string | undefined): Record<stri
   return out;
 }
 
+export function extractBearerToken(authHeader: string | undefined): string | undefined {
+  if (!authHeader) return undefined;
+  const trimmed = authHeader.trim();
+  if (!trimmed.toLowerCase().startsWith('bearer ')) return undefined;
+  const token = trimmed.slice(7).trim();
+  return token || undefined;
+}
+
 function isSecureRequest(req: Request): boolean {
   const forwardedProto = req.headers['x-forwarded-proto'];
   if (typeof forwardedProto === 'string' && forwardedProto.includes('https')) {
@@ -80,23 +88,31 @@ export function setSessionCookie(
 ): void {
   const secure = isSecureRequest(req);
   const signed = signSessionToken(sessionId);
-  res.cookie(SESSION_COOKIE_NAME, signed, {
+  const cookieOpts: CookieOptions & { partitioned?: boolean } = {
     httpOnly: true,
     sameSite: secure ? 'none' : 'lax',
     secure,
     path: '/',
     maxAge: maxAgeMs,
-  });
+  };
+  if (secure) {
+    cookieOpts.partitioned = true;
+  }
+  res.cookie(SESSION_COOKIE_NAME, signed, cookieOpts);
 }
 
 export function clearSessionCookie(req: Request, res: Response): void {
   const secure = isSecureRequest(req);
-  res.clearCookie(SESSION_COOKIE_NAME, {
+  const cookieOpts: CookieOptions & { partitioned?: boolean } = {
     httpOnly: true,
     sameSite: secure ? 'none' : 'lax',
     secure,
     path: '/',
-  });
+  };
+  if (secure) {
+    cookieOpts.partitioned = true;
+  }
+  res.clearCookie(SESSION_COOKIE_NAME, cookieOpts);
 }
 
 /**

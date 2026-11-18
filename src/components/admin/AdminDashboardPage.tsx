@@ -27,16 +27,14 @@ import {
   type StaffAccountStatus,
 } from '../../utils/adminManagement';
 import { getApiBaseUrl, isBackendConnected } from '../../utils/apiConfig';
+import { apiFetch, clearClientSessionToken  } from '../../utils/clientSession';
 import type { ChangePasswordDraft } from '../../utils/studentProfilePage';
 import { AddBookPage } from '../librarian/AddBookPage';
 import { LibrarianInventoryPage } from '../librarian/LibrarianInventoryPage';
 import { ReportsAnalyticsPage } from '../librarian/ReportsAnalyticsPage';
 import { AdminManagementPage } from './AdminManagementPage';
 import { AdminOverviewView } from './AdminOverviewView';
-import {
-  AdminAuditLogsSection,
-  AdminProfileSection,
-} from './AdminRolesAuditProfileSections';
+import { AdminAuditLogsSection, AdminProfileSection } from './AdminRolesAuditProfileSections';
 import { AdminShell } from './AdminShell';
 
 const ADMIN_STORE_STORAGE_KEY = 'ai_smart_library_admin_workspace_v1';
@@ -99,7 +97,7 @@ export function AdminDashboardPage({
   const refreshAdminWorkspace = useCallback(
     async (signal?: AbortSignal) => {
       if (!hasBackendApi) return;
-      const wsRes = await fetch(
+      const wsRes = await apiFetch(
         `${apiBaseUrl.replace(/\/+$/, '')}/api/admin/workspace`,
         {
           method: 'GET',
@@ -133,7 +131,7 @@ export function AdminDashboardPage({
     const verify = async () => {
       try {
         setIsCheckingSession(true);
-        const res = await fetch(`${apiBaseUrl.replace(/\/+$/, '')}/api/auth/me`, {
+        const res = await apiFetch(`${apiBaseUrl.replace(/\/+$/, '')}/api/auth/me`, {
           method: 'GET',
           credentials: 'include',
           signal: controller.signal,
@@ -192,7 +190,7 @@ export function AdminDashboardPage({
   const handleLogout = async () => {
     if (hasBackendApi) {
       try {
-        await fetch(`${apiBaseUrl.replace(/\/+$/, '')}/api/auth/logout`, {
+        await apiFetch(`${apiBaseUrl.replace(/\/+$/, '')}/api/auth/logout`, {
           method: 'POST',
           credentials: 'include',
         });
@@ -200,6 +198,7 @@ export function AdminDashboardPage({
         // Proceed cleanly to login redirect
       }
     }
+    clearClientSessionToken();
     onNavigate({ name: 'admin-login' });
   };
 
@@ -208,7 +207,7 @@ export function AdminDashboardPage({
       if (!hasBackendApi) return;
       setSyncError(null);
       try {
-        const res = await fetch(`${apiBaseUrl.replace(/\/+$/, '')}${path}`, {
+        const res = await apiFetch(`${apiBaseUrl.replace(/\/+$/, '')}${path}`, {
           method,
           credentials: 'include',
           headers: {
@@ -1012,7 +1011,7 @@ export function AdminDashboardPage({
   ): Promise<{ ok: boolean; error?: string }> => {
     if (hasBackendApi) {
       try {
-        const res = await fetch(
+        const res = await apiFetch(
           `${apiBaseUrl.replace(/\/+$/, '')}/api/admin/change-password`,
           {
             method: 'PUT',

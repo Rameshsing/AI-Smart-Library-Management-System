@@ -25,6 +25,7 @@ import {
   type LibrarianPermissions,
 } from '../../utils/librarianDashboard';
 import { getApiBaseUrl, isBackendConnected } from '../../utils/apiConfig';
+import { apiFetch } from '../../utils/clientSession';
 import type { CirculationPolicy, CirculationStudentStatus } from '../../utils/librarianCirculation';
 import type { LibrarianReservationItem } from '../../utils/librarianReservations';
 import {
@@ -200,7 +201,7 @@ export function StudentRecordsPage({
 
     try {
       const qs = buildStudentsApiQueryParams(filterCriteria, page, PAGE_SIZE).toString();
-      const response = await fetch(
+      const response = await apiFetch(
         `${apiBaseUrl.replace(/\/+$/, '')}/api/librarian/students?${qs}`,
         { method: 'GET', credentials: 'include', headers: { Accept: 'application/json' } }
       );
@@ -313,7 +314,7 @@ export function StudentRecordsPage({
 
       const base = apiBaseUrl.replace(/\/+$/, '');
       const fetchJson = async <T,>(url: string): Promise<T> => {
-        const res = await fetch(url, {
+        const res = await apiFetch(url, {
           method: 'GET',
           credentials: 'include',
           headers: { Accept: 'application/json' },
@@ -457,7 +458,7 @@ export function StudentRecordsPage({
 
     setStatusActionBusy(true);
     try {
-      const response = await fetch(
+      const response = await apiFetch(
         `${apiBaseUrl.replace(/\/+$/, '')}/api/librarian/students/${selectedStudent.student_id}/status`,
         {
           method: 'POST',

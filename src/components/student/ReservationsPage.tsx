@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import type { AppRoute } from '../../data/libraryData';
 import { getApiBaseUrl, isBackendConnected } from '../../utils/apiConfig';
+import { apiFetch } from '../../utils/clientSession';
 import type { StudentProfile } from '../../utils/studentDashboard';
 import {
   buildReservationsApiParams,
@@ -80,7 +81,7 @@ export function ReservationsPage({
             pageToLoad,
             DEFAULT_RESERVATIONS_PAGE_LIMIT
           );
-          const response = await fetch(
+          const response = await apiFetch(
             `${apiBaseUrl}/api/student/reservations?${params.toString()}`,
             {
               method: 'GET',
@@ -214,7 +215,7 @@ export function ReservationsPage({
 
     setIsCancelling(true);
     try {
-      const response = await fetch(
+      const response = await apiFetch(
         `${apiBaseUrl}/api/reservations/${reservation.reservation_id}/cancel`,
         {
           method: 'POST',
@@ -265,7 +266,7 @@ export function ReservationsPage({
     }
 
     try {
-      const response = await fetch(
+      const response = await apiFetch(
         `${apiBaseUrl}/api/reservations/${reservation.reservation_id}/fulfill`,
         {
           method: 'POST',

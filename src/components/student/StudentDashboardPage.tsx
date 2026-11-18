@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import type { AppRoute } from '../../data/libraryData';
 import { getApiBaseUrl, isBackendConnected } from '../../utils/apiConfig';
+import { apiFetch, clearClientSessionToken  } from '../../utils/clientSession';
 import {
   computeDashboardSummary,
   createSampleStudentDashboardData,
@@ -152,7 +153,7 @@ export function StudentDashboardPage({
 
       if (isBackendConnected()) {
         try {
-          const response = await fetch(`${apiBaseUrl}/api/student/dashboard`, {
+          const response = await apiFetch(`${apiBaseUrl}/api/student/dashboard`, {
             method: 'GET',
             credentials: 'include',
             headers: {
@@ -283,7 +284,7 @@ export function StudentDashboardPage({
     const apiBaseUrl = getApiBaseUrl();
     if (isBackendConnected()) {
       try {
-        await fetch(`${apiBaseUrl}/api/auth/logout`, {
+        await apiFetch(`${apiBaseUrl}/api/auth/logout`, {
           method: 'POST',
           credentials: 'include',
         });
@@ -291,6 +292,7 @@ export function StudentDashboardPage({
         // Proceed to login even if logout endpoint is unreachable
       }
     }
+    clearClientSessionToken();
     onNavigate({ name: 'login' });
   };
 

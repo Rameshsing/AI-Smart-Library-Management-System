@@ -25,6 +25,7 @@ import {
   type LibrarianPermissions,
 } from '../../utils/librarianDashboard';
 import { getApiBaseUrl, isBackendConnected } from '../../utils/apiConfig';
+import { apiFetch } from '../../utils/clientSession';
 import type { InventoryPhysicalCopy } from '../../utils/librarianInventory';
 import {
   buildReservationsApiQueryParams,
@@ -203,7 +204,7 @@ export function ReservationsManagementPage({
 
     try {
       const qs = buildReservationsApiQueryParams(filterCriteria, page, PAGE_SIZE).toString();
-      const response = await fetch(
+      const response = await apiFetch(
         `${apiBaseUrl.replace(/\/+$/, '')}/api/librarian/reservations?${qs}`,
         { method: 'GET', credentials: 'include', headers: { Accept: 'application/json' } }
       );
@@ -306,7 +307,7 @@ export function ReservationsManagementPage({
 
       setIsLoadingDetail(true);
       try {
-        const res = await fetch(
+        const res = await apiFetch(
           `${apiBaseUrl.replace(/\/+$/, '')}/api/librarian/reservations/${item.reservation_id}`,
           { method: 'GET', credentials: 'include', headers: { Accept: 'application/json' } }
         );
@@ -408,7 +409,7 @@ export function ReservationsManagementPage({
 
     setActionBusy(true);
     try {
-      const response = await fetch(
+      const response = await apiFetch(
         `${apiBaseUrl.replace(/\/+$/, '')}/api/librarian/reservations/${selectedReservation.reservation_id}/ready`,
         {
           method: 'POST',
@@ -469,7 +470,7 @@ export function ReservationsManagementPage({
 
     setActionBusy(true);
     try {
-      const response = await fetch(
+      const response = await apiFetch(
         `${apiBaseUrl.replace(/\/+$/, '')}/api/librarian/reservations/${selectedReservation.reservation_id}/cancel`,
         {
           method: 'POST',
@@ -529,7 +530,7 @@ export function ReservationsManagementPage({
 
     setActionBusy(true);
     try {
-      const response = await fetch(
+      const response = await apiFetch(
         `${apiBaseUrl.replace(/\/+$/, '')}/api/librarian/reservations/${selectedReservation.reservation_id}/extend`,
         {
           method: 'POST',

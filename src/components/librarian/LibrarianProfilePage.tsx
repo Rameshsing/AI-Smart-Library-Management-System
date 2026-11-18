@@ -24,6 +24,7 @@ import {
   type LibrarianProfile,
 } from '../../utils/librarianDashboard';
 import { getApiBaseUrl, isBackendConnected } from '../../utils/apiConfig';
+import { apiFetch } from '../../utils/clientSession';
 import {
   buildLibrarianNotificationPrefsPayload,
   buildLibrarianProfileUpdatePayload,
@@ -174,7 +175,7 @@ export function LibrarianProfilePage({
     }
 
     try {
-      const res = await fetch(`${apiBaseUrl.replace(/\/+$/, '')}/api/librarian/profile`, {
+      const res = await apiFetch(`${apiBaseUrl.replace(/\/+$/, '')}/api/librarian/profile`, {
         method: 'GET',
         credentials: 'include',
         headers: { Accept: 'application/json' },
@@ -290,7 +291,7 @@ export function LibrarianProfilePage({
 
     try {
       if (hasBackendApi) {
-        const res = await fetch(`${apiBaseUrl.replace(/\/+$/, '')}/api/librarian/profile`, {
+        const res = await apiFetch(`${apiBaseUrl.replace(/\/+$/, '')}/api/librarian/profile`, {
           method: 'PUT',
           credentials: 'include',
           headers: {
@@ -399,7 +400,7 @@ export function LibrarianProfilePage({
 
     try {
       if (hasBackendApi) {
-        const res = await fetch(
+        const res = await apiFetch(
           `${apiBaseUrl.replace(/\/+$/, '')}/api/librarian/notification-preferences`,
           {
             method: 'PUT',
@@ -461,7 +462,7 @@ export function LibrarianProfilePage({
     setIsSavingPassword(true);
     try {
       if (hasBackendApi) {
-        const res = await fetch(
+        const res = await apiFetch(
           `${apiBaseUrl.replace(/\/+$/, '')}/api/librarian/change-password`,
           {
             method: 'PUT',
@@ -516,7 +517,7 @@ export function LibrarianProfilePage({
     if (!payload) return;
     if (hasBackendApi) {
       try {
-        const res = await fetch(
+        const res = await apiFetch(
           `${apiBaseUrl.replace(/\/+$/, '')}/api/librarian/sessions/${encodeURIComponent(
             sessionId
           )}`,

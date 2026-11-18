@@ -13,6 +13,7 @@ import {
 import type { AppRoute } from '../../data/libraryData';
 import type { StudentProfile } from '../../utils/studentDashboard';
 import { getApiBaseUrl, isBackendConnected } from '../../utils/apiConfig';
+import { apiFetch } from '../../utils/clientSession';
 import {
   buildCatalogApiParams,
   buildPaginationTokens,
@@ -148,7 +149,7 @@ export function BrowseBooksPage({
       if (isBackendConnected()) {
         try {
           const params = buildCatalogApiParams(queryState);
-          const response = await fetch(`${apiBaseUrl}/api/books?${params.toString()}`, {
+          const response = await apiFetch(`${apiBaseUrl}/api/books?${params.toString()}`, {
             method: 'GET',
             credentials: 'include',
             headers: { Accept: 'application/json' },

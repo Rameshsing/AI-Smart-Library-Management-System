@@ -1,0 +1,124 @@
+{
+  "entities": {
+    "UserLibraryProfile": {
+      "title": "UserLibraryProfile",
+      "description": "Authenticated user's non-PII academic library profile and recommendation interests stored in Firestore.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Firebase Auth UID of the profile owner.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Display name shown inside the user's library portal.",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "department": {
+          "type": "string",
+          "description": "Academic department or faculty.",
+          "maxLength": 100
+        },
+        "academicYear": {
+          "type": "string",
+          "description": "Academic year or staff designation.",
+          "maxLength": 40
+        },
+        "interests": {
+          "type": "array",
+          "description": "Bounded list of selected reading topics (max 15 items)."
+        },
+        "preferredSubjects": {
+          "type": "array",
+          "description": "Bounded list of preferred academic subjects (max 15 items)."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the profile was created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the profile was last updated."
+        }
+      },
+      "required": ["uid", "displayName", "createdAt", "updatedAt"]
+    },
+    "UserPrivateInfo": {
+      "title": "UserPrivateInfo",
+      "description": "Isolated PII contact and institutional identifier document for a library user.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Firebase Auth UID of the owner.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "Verified email address.",
+          "minLength": 3,
+          "maxLength": 160
+        },
+        "studentCode": {
+          "type": "string",
+          "description": "Institutional library member code.",
+          "maxLength": 40
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp."
+        }
+      },
+      "required": ["uid", "email", "createdAt", "updatedAt"]
+    },
+    "AdminRoleMarker": {
+      "title": "AdminRoleMarker",
+      "description": "Trusted server/bootstrapped administrator authorization document.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Firebase Auth UID of the administrator.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "assignedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when admin marker was created."
+        }
+      },
+      "required": ["uid", "assignedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserLibraryProfile" },
+      "description": "Non-PII academic library profile and topic preferences keyed by Firebase UID."
+    },
+    "/users/{userId}/private/{docId}": {
+      "schema": { "$ref": "#/entities/UserPrivateInfo" },
+      "description": "Split-collection PII contact record (docId = 'contact') accessible only to owner or admin."
+    },
+    "/admins/{adminUid}": {
+      "schema": { "$ref": "#/entities/AdminRoleMarker" },
+      "description": "Trusted administrator membership markers."
+    }
+  }
+}

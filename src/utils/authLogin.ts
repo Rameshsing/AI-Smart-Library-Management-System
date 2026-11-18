@@ -120,6 +120,7 @@ export function validateForgotPasswordEmail(email: string): {
 export interface ServerAuthResponse {
   authenticated: boolean;
   verified_role?: LoginRole;
+  session_token?: string;
   message?: string;
 }
 

@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import type { AppRoute } from '../../data/libraryData';
 import { getApiBaseUrl, isBackendConnected } from '../../utils/apiConfig';
+import { apiFetch } from '../../utils/clientSession';
 import type { StudentProfile } from '../../utils/studentDashboard';
 import {
   buildNotificationsApiParams,
@@ -113,12 +114,12 @@ export function NotificationsPage({
           });
 
           const [listResponse, unreadResponse] = await Promise.all([
-            fetch(`${apiBaseUrl}/api/student/notifications?${params.toString()}`, {
+            apiFetch(`${apiBaseUrl}/api/student/notifications?${params.toString()}`, {
               method: 'GET',
               credentials: 'include',
               headers: { Accept: 'application/json' },
             }),
-            fetch(`${apiBaseUrl}/api/student/notifications/unread-count`, {
+            apiFetch(`${apiBaseUrl}/api/student/notifications/unread-count`, {
               method: 'GET',
               credentials: 'include',
               headers: { Accept: 'application/json' },
@@ -288,7 +289,7 @@ export function NotificationsPage({
 
     setMarkingReadId(notification.notification_id);
     try {
-      const response = await fetch(
+      const response = await apiFetch(
         `${apiBaseUrl}/api/notifications/${notification.notification_id}/read`,
         {
           method: 'PATCH',
@@ -352,7 +353,7 @@ export function NotificationsPage({
 
     setIsMarkingAllRead(true);
     try {
-      const response = await fetch(`${apiBaseUrl}/api/notifications/mark-all-read`, {
+      const response = await apiFetch(`${apiBaseUrl}/api/notifications/mark-all-read`, {
         method: 'PATCH',
         credentials: 'include',
         headers: {
@@ -395,7 +396,7 @@ export function NotificationsPage({
 
     setIsLoadingPrefs(true);
     try {
-      const response = await fetch(`${apiBaseUrl}/api/student/notification-preferences`, {
+      const response = await apiFetch(`${apiBaseUrl}/api/student/notification-preferences`, {
         method: 'GET',
         credentials: 'include',
         headers: { Accept: 'application/json' },
@@ -433,7 +434,7 @@ export function NotificationsPage({
 
     setIsSavingPrefs(true);
     try {
-      const response = await fetch(`${apiBaseUrl}/api/student/notification-preferences`, {
+      const response = await apiFetch(`${apiBaseUrl}/api/student/notification-preferences`, {
         method: 'PUT',
         credentials: 'include',
         headers: {
@@ -478,7 +479,7 @@ export function NotificationsPage({
     }
 
     try {
-      const response = await fetch(
+      const response = await apiFetch(
         `${apiBaseUrl}/api/notifications/${notification.notification_id}`,
         {
           method: 'DELETE',

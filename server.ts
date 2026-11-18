@@ -3,15 +3,18 @@ import fs from 'node:fs';
 import path from 'node:path';
 import express from 'express';
 import { createLibraryApp } from './src/server/createApp.ts';
+import { resolveDatabaseConnectionConfig } from './src/server/dbConfig.ts';
 import { LibraryService } from './src/server/libraryService.ts';
 
 async function startServer() {
   const port = Number.parseInt(process.env.PORT ?? '3000', 10) || 3000;
-  const dbPath =
-    process.env.LIBRARY_DB_PATH?.trim() ||
-    path.resolve(process.cwd(), '.data/library-db.json');
+  const dbConfig = resolveDatabaseConnectionConfig(process.env, process.cwd());
 
-  const service = new LibraryService({ dbFilePath: dbPath });
+  const service = new LibraryService({ dbFilePath: dbConfig.resolvedFilePath });
+  const diag = service.getDatabaseDiagnostics();
+  console.info(
+    `[DB SETUP] engine=${diag.engine} source=${diag.connection_source} target=${diag.target} models_verified=${diag.models_verified} users=${diag.model_counts.users} books=${diag.model_counts.books} external_database_url=${diag.external_database_url_configured}`
+  );
   service.runScheduler();
 
   // Periodic maintenance scheduler (overdue transitions, reminders, pickup expiration, scheduled announcements)

@@ -1,13 +1,20 @@
 import express from 'express';
 import type { NextFunction, Request, Response } from 'express';
+import {
+  verifyFirebaseIdToken,
+  verifyFirebaseRestoreToken,
+  type VerifiedFirebaseGoogleClaims,
+} from '../lib/firebaseAdmin.ts';
 import { HttpError, LibraryService } from './libraryService.ts';
 import {
   clearSessionCookie,
+  extractBearerToken,
   hashPassword,
   parseCookieHeader,
   sanitizePlainText,
   SESSION_COOKIE_NAME,
   setSessionCookie,
+  signSessionToken,
   verifyPassword,
   verifySignedSessionToken,
 } from './security.ts';
@@ -42,7 +49,10 @@ function getOptionalSession(
   req: AuthenticatedRequest
 ): { session: DbSession; user: DbUser } | null {
   const cookies = parseCookieHeader(req.headers.cookie);
-  const sessionId = verifySignedSessionToken(cookies[SESSION_COOKIE_NAME]);
+  const cookieToken = cookies[SESSION_COOKIE_NAME];
+  const bearerToken = extractBearerToken(req.headers.authorization);
+  const sessionId =
+    verifySignedSessionToken(cookieToken) ?? verifySignedSessionToken(bearerToken);
   const found = service.getSessionUser(sessionId);
   if (found) {
     req.currentUser = found.user;
@@ -51,7 +61,32 @@ function getOptionalSession(
   return found;
 }
 
-export function createLibraryApp(service: LibraryService) {
+export interface CreateLibraryAppOptions {
+  verifyIdToken?: (idToken: string) => Promise<VerifiedFirebaseGoogleClaims>;
+  verifyRestoreToken?: (idToken: string) => Promise<VerifiedFirebaseGoogleClaims>;
+}
+
+function parseProfileHint(raw: unknown) {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const obj = raw as Record<string, unknown>;
+  return {
+    displayName: typeof obj.displayName === 'string' ? obj.displayName : undefined,
+    studentCode: typeof obj.studentCode === 'string' ? obj.studentCode : undefined,
+    department: typeof obj.department === 'string' ? obj.department : undefined,
+    academicYear: typeof obj.academicYear === 'string' ? obj.academicYear : undefined,
+    interests: Array.isArray(obj.interests) ? obj.interests.map(String) : undefined,
+    preferredSubjects: Array.isArray(obj.preferredSubjects)
+      ? obj.preferredSubjects.map(String)
+      : undefined,
+  };
+}
+
+export function createLibraryApp(
+  service: LibraryService,
+  options: CreateLibraryAppOptions = {}
+) {
+  const verifyGoogleToken = options.verifyIdToken ?? verifyFirebaseIdToken;
+  const verifyRestoreToken = options.verifyRestoreToken ?? verifyFirebaseRestoreToken;
   const app = express();
   app.set('trust proxy', 1);
   app.use(express.json({ limit: '5mb' }));
@@ -105,9 +140,11 @@ export function createLibraryApp(service: LibraryService) {
   // ==================== HEALTH & PUBLIC ====================
 
   app.get('/api/health', (_req, res) => {
+    const database = service.getDatabaseDiagnostics();
     res.json({
-      ok: true,
+      ok: database.connected && database.models_verified,
       service: 'ai-smart-library-api',
+      database,
       timestamp: new Date().toISOString(),
     });
   });
@@ -135,7 +172,97 @@ export function createLibraryApp(service: LibraryService) {
         Boolean(remember_me)
       );
       setSessionCookie(req, res, session.session_id, maxAgeMs);
-      res.json(service.buildSessionPayload(user));
+      res.json({
+        ...service.buildSessionPayload(user),
+        session_token: signSessionToken(session.session_id),
+      });
+    })
+  );
+
+  app.post(
+    '/api/auth/firebase-google',
+    asyncHandler(async (req, res) => {
+      const { id_token, requested_role, remember_me, profile_hint } = req.body ?? {};
+      const tokenStr = typeof id_token === 'string' ? id_token.trim() : '';
+      if (!tokenStr) {
+        throw new HttpError(400, 'Firebase ID token is required.', 'MISSING_ID_TOKEN');
+      }
+
+      let claims: VerifiedFirebaseGoogleClaims;
+      try {
+        claims = await verifyGoogleToken(tokenStr);
+      } catch (err) {
+        throw new HttpError(
+          401,
+          err instanceof Error ? err.message : 'Invalid or expired Google sign-in token.',
+          'INVALID_FIREBASE_TOKEN'
+        );
+      }
+
+      const user = service.authenticateOrProvisionGoogleUser({
+        email: claims.email,
+        name: claims.name,
+        uid: claims.uid,
+        requestedRole: requested_role ? (String(requested_role) as UserRole) : undefined,
+        profileHint: parseProfileHint(profile_hint),
+      });
+
+      const userAgent = String(req.headers['user-agent'] ?? 'Web Browser').slice(0, 60);
+      const { session, maxAgeMs } = service.createSession(
+        user,
+        userAgent,
+        req.ip || '127.0.0.1',
+        Boolean(remember_me)
+      );
+      setSessionCookie(req, res, session.session_id, maxAgeMs);
+      res.json({
+        ...service.buildSessionPayload(user),
+        session_token: signSessionToken(session.session_id),
+      });
+    })
+  );
+
+  app.post(
+    '/api/auth/firebase-restore',
+    asyncHandler(async (req, res) => {
+      const { id_token, password, requested_role, remember_me, profile_hint } = req.body ?? {};
+      const tokenStr = typeof id_token === 'string' ? id_token.trim() : '';
+      if (!tokenStr) {
+        throw new HttpError(400, 'Firebase ID token is required.', 'MISSING_ID_TOKEN');
+      }
+
+      let claims: VerifiedFirebaseGoogleClaims;
+      try {
+        claims = await verifyRestoreToken(tokenStr);
+      } catch (err) {
+        throw new HttpError(
+          401,
+          err instanceof Error ? err.message : 'Invalid or expired Firebase authentication token.',
+          'INVALID_FIREBASE_TOKEN'
+        );
+      }
+
+      const user = service.restoreOrAuthenticateFirebaseUser({
+        email: claims.email,
+        name: claims.name,
+        uid: claims.uid,
+        password: typeof password === 'string' ? password : undefined,
+        requestedRole: requested_role ? (String(requested_role) as UserRole) : undefined,
+        profileHint: parseProfileHint(profile_hint),
+      });
+
+      const userAgent = String(req.headers['user-agent'] ?? 'Web Browser').slice(0, 60);
+      const { session, maxAgeMs } = service.createSession(
+        user,
+        userAgent,
+        req.ip || '127.0.0.1',
+        Boolean(remember_me)
+      );
+      setSessionCookie(req, res, session.session_id, maxAgeMs);
+      res.json({
+        ...service.buildSessionPayload(user),
+        session_token: signSessionToken(session.session_id),
+      });
     })
   );
 
@@ -143,14 +270,61 @@ export function createLibraryApp(service: LibraryService) {
     '/api/auth/register',
     asyncHandler((req, res) => {
       const body = req.body ?? {};
+      const nestedUser =
+        body.user && typeof body.user === 'object' ? (body.user as Record<string, unknown>) : {};
+      const nestedStudent =
+        body.student && typeof body.student === 'object'
+          ? (body.student as Record<string, unknown>)
+          : {};
+
+      const rawInterests = Array.isArray(body.interests)
+        ? body.interests
+        : Array.isArray(body.student_interests)
+          ? body.student_interests
+          : [];
+      const rawSubjects = Array.isArray(body.preferred_subjects)
+        ? body.preferred_subjects
+        : Array.isArray(body.student_subjects)
+          ? body.student_subjects
+          : undefined;
+
       const user = service.registerStudent({
-        full_name: String(body.full_name ?? ''),
-        email: String(body.email ?? ''),
-        student_id: String(body.student_id ?? body.student_code ?? ''),
-        department: String(body.department ?? 'Computer Science'),
-        academic_year: String(body.academic_year ?? '1st Year'),
-        password: String(body.password ?? ''),
-        interests: Array.isArray(body.interests) ? body.interests.map(String) : [],
+        full_name: String(
+          body.full_name ?? nestedStudent.full_name ?? nestedUser.full_name ?? ''
+        ),
+        email: String(body.email ?? nestedUser.email ?? nestedStudent.email ?? ''),
+        student_id: String(
+          body.student_id ??
+            body.student_code ??
+            nestedStudent.student_code ??
+            nestedStudent.student_id ??
+            ''
+        ),
+        department: String(
+          body.department ??
+            body.course_department ??
+            nestedStudent.course_department ??
+            nestedStudent.department ??
+            'Computer Science'
+        ),
+        academic_year: String(
+          body.academic_year ?? nestedStudent.academic_year ?? '1st Year'
+        ),
+        password: String(body.password ?? nestedUser.password ?? ''),
+        interests: rawInterests.map(String),
+        preferred_subjects: rawSubjects ? rawSubjects.map(String) : undefined,
+        mobile:
+          (body.mobile_number ?? nestedStudent.mobile_number)
+            ? String(body.mobile_number ?? nestedStudent.mobile_number)
+            : null,
+        institution:
+          (body.institution_name ?? nestedStudent.institution_name)
+            ? String(body.institution_name ?? nestedStudent.institution_name)
+            : undefined,
+        firebase_uid:
+          typeof body.firebase_uid === 'string' && body.firebase_uid.trim()
+            ? body.firebase_uid.trim()
+            : undefined,
       });
       res.status(201).json({
         registered: true,
@@ -170,14 +344,31 @@ export function createLibraryApp(service: LibraryService) {
   });
 
   const handleSessionMe = (req: AuthenticatedRequest, res: Response) => {
+    const startedAt = performance.now();
     const found = getOptionalSession(service, req);
     if (!found) {
+      service.emitAuthDebug({
+        operation: 'session_lookup',
+        recordFound: false,
+        queryDurationMs: performance.now() - startedAt,
+        outcome: 'no_active_session',
+      });
       res.status(401).json({
         authenticated: false,
         message: 'No active authenticated session.',
       });
       return;
     }
+    service.emitAuthDebug({
+      operation: 'session_lookup',
+      identifier: found.user.email,
+      recordFound: true,
+      userId: found.user.user_id,
+      role: found.user.role,
+      accountStatus: found.user.account_status,
+      queryDurationMs: performance.now() - startedAt,
+      outcome: 'session_active',
+    });
     res.json(service.buildSessionPayload(found.user));
   };
 

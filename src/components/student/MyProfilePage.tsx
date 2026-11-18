@@ -14,7 +14,10 @@ import {
   X,
 } from 'lucide-react';
 import type { AppRoute } from '../../data/libraryData';
+import { auth } from '../../lib/firebase';
+import { syncUserProfileToFirestore } from '../../lib/firestoreLibrary';
 import { getApiBaseUrl, isBackendConnected } from '../../utils/apiConfig';
+import { apiFetch } from '../../utils/clientSession';
 import type { StudentProfile } from '../../utils/studentDashboard';
 import type { NotificationPreferencesPayload } from '../../utils/notificationsPage';
 import {
@@ -134,6 +137,52 @@ export function MyProfilePage({ student, onNavigate }: MyProfilePageProps) {
   const apiBaseUrl = getApiBaseUrl();
   const backendConnected = isBackendConnected();
 
+  const syncProfileChangesToCloud = useCallback(
+    (overrides?: {
+      displayName?: string;
+      email?: string;
+      department?: string;
+      academicYear?: string;
+      interests?: string[];
+      preferredSubjects?: string[];
+      studentCode?: string;
+    }) => {
+      const fbUser = auth.currentUser;
+      if (!fbUser || !fbUser.emailVerified) return;
+      void syncUserProfileToFirestore({
+        uid: fbUser.uid,
+        displayName:
+          overrides?.displayName ?? savedProfile?.personal.full_name ?? personalDraft.full_name,
+        email: overrides?.email ?? savedProfile?.personal.email ?? personalDraft.email,
+        department:
+          overrides?.department ??
+          savedProfile?.academic.course_department ??
+          academicDraft.course_department,
+        academicYear:
+          overrides?.academicYear ??
+          savedProfile?.academic.academic_year ??
+          academicDraft.academic_year,
+        interests: overrides?.interests ?? savedProfile?.reading_interests ?? interestsDraft,
+        preferredSubjects:
+          overrides?.preferredSubjects ?? savedProfile?.preferred_subjects ?? subjectsDraft,
+        studentCode:
+          overrides?.studentCode ??
+          savedProfile?.academic.student_code ??
+          academicDraft.student_code,
+      }).catch(() => {});
+    },
+    [
+      academicDraft.academic_year,
+      academicDraft.course_department,
+      academicDraft.student_code,
+      interestsDraft,
+      personalDraft.email,
+      personalDraft.full_name,
+      savedProfile,
+      subjectsDraft,
+    ]
+  );
+
   const hydrateDraftsFromSaved = useCallback((payload: StudentProfileFullPayload) => {
     setPersonalDraft({ ...payload.personal });
     setPersonalErrors({});
@@ -164,7 +213,7 @@ export function MyProfilePage({ student, onNavigate }: MyProfilePageProps) {
 
     if (backendConnected) {
       try {
-        const response = await fetch(`${apiBaseUrl}/api/student/profile`, {
+        const response = await apiFetch(`${apiBaseUrl}/api/student/profile`, {
           method: 'GET',
           credentials: 'include',
           headers: { Accept: 'application/json' },
@@ -351,7 +400,7 @@ export function MyProfilePage({ student, onNavigate }: MyProfilePageProps) {
 
     setIsSaving(true);
     try {
-      const response = await fetch(`${apiBaseUrl}/api/student/profile`, {
+      const response = await apiFetch(`${apiBaseUrl}/api/student/profile`, {
         method: 'PUT',
         credentials: 'include',
         headers: {
@@ -381,8 +430,21 @@ export function MyProfilePage({ student, onNavigate }: MyProfilePageProps) {
         const nextSaved = { ...json.profile, is_prototype_sample: false };
         setSavedProfile(nextSaved);
         hydrateDraftsFromSaved(nextSaved);
+        syncProfileChangesToCloud({
+          displayName: nextSaved.personal.full_name,
+          email: nextSaved.personal.email,
+          department: nextSaved.academic.course_department,
+          academicYear: nextSaved.academic.academic_year,
+          interests: nextSaved.reading_interests,
+          preferredSubjects: nextSaved.preferred_subjects,
+          studentCode: nextSaved.academic.student_code,
+        });
       } else {
         setReloadNonce((prev) => prev + 1);
+        syncProfileChangesToCloud({
+          displayName: personalDraft.full_name,
+          email: personalDraft.email,
+        });
       }
 
       setToastMessage(
@@ -417,7 +479,7 @@ export function MyProfilePage({ student, onNavigate }: MyProfilePageProps) {
 
     setIsSaving(true);
     try {
-      const response = await fetch(`${apiBaseUrl}/api/student/profile`, {
+      const response = await apiFetch(`${apiBaseUrl}/api/student/profile`, {
         method: 'PUT',
         credentials: 'include',
         headers: {
@@ -436,6 +498,11 @@ export function MyProfilePage({ student, onNavigate }: MyProfilePageProps) {
         throw new Error(`Unable to update academic details (${response.status}).`);
       }
 
+      syncProfileChangesToCloud({
+        department: academicDraft.course_department,
+        academicYear: academicDraft.academic_year,
+        studentCode: academicDraft.student_code,
+      });
       setToastMessage('Academic details updated.');
       setReloadNonce((prev) => prev + 1);
     } catch (err) {
@@ -460,7 +527,7 @@ export function MyProfilePage({ student, onNavigate }: MyProfilePageProps) {
 
     setIsSaving(true);
     try {
-      const response = await fetch(`${apiBaseUrl}/api/student/interests`, {
+      const response = await apiFetch(`${apiBaseUrl}/api/student/interests`, {
         method: 'PUT',
         credentials: 'include',
         headers: {
@@ -488,6 +555,7 @@ export function MyProfilePage({ student, onNavigate }: MyProfilePageProps) {
             }
           : prev
       );
+      syncProfileChangesToCloud({ interests: [...interestsDraft] });
       setToastMessage('Reading interests updated.');
     } catch (err) {
       setActionAlertMessage(
@@ -511,7 +579,7 @@ export function MyProfilePage({ student, onNavigate }: MyProfilePageProps) {
 
     setIsSaving(true);
     try {
-      const response = await fetch(`${apiBaseUrl}/api/student/subjects`, {
+      const response = await apiFetch(`${apiBaseUrl}/api/student/subjects`, {
         method: 'PUT',
         credentials: 'include',
         headers: {
@@ -533,6 +601,7 @@ export function MyProfilePage({ student, onNavigate }: MyProfilePageProps) {
       setSavedProfile((prev) =>
         prev ? { ...prev, preferred_subjects: [...subjectsDraft] } : prev
       );
+      syncProfileChangesToCloud({ preferredSubjects: [...subjectsDraft] });
       setToastMessage('Preferred subjects updated.');
     } catch (err) {
       setActionAlertMessage(
@@ -557,7 +626,7 @@ export function MyProfilePage({ student, onNavigate }: MyProfilePageProps) {
 
     setIsSaving(true);
     try {
-      const response = await fetch(`${apiBaseUrl}/api/student/recommendation-preferences`, {
+      const response = await apiFetch(`${apiBaseUrl}/api/student/recommendation-preferences`, {
         method: 'PUT',
         credentials: 'include',
         headers: {
@@ -605,7 +674,7 @@ export function MyProfilePage({ student, onNavigate }: MyProfilePageProps) {
 
     setIsSaving(true);
     try {
-      const response = await fetch(`${apiBaseUrl}/api/student/notification-preferences`, {
+      const response = await apiFetch(`${apiBaseUrl}/api/student/notification-preferences`, {
         method: 'PUT',
         credentials: 'include',
         headers: {
@@ -661,7 +730,7 @@ export function MyProfilePage({ student, onNavigate }: MyProfilePageProps) {
 
     setIsSaving(true);
     try {
-      const response = await fetch(`${apiBaseUrl}/api/student/change-password`, {
+      const response = await apiFetch(`${apiBaseUrl}/api/student/change-password`, {
         method: 'POST',
         credentials: 'include',
         headers: {
@@ -709,7 +778,7 @@ export function MyProfilePage({ student, onNavigate }: MyProfilePageProps) {
 
     setRevokingSessionId(sessionId);
     try {
-      const response = await fetch(`${apiBaseUrl}/api/student/sessions/${sessionId}`, {
+      const response = await apiFetch(`${apiBaseUrl}/api/student/sessions/${sessionId}`, {
         method: 'DELETE',
         credentials: 'include',
         headers: { Accept: 'application/json' },
